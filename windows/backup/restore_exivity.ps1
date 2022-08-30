@@ -59,7 +59,7 @@ echo "==========================================================================
 
 foreach ($dir in $restore_dirs) {
     echo "restoring $dir..."
-    if ($dir -eq "transcript" -Or $dir -eq "use") {
+    if ($dir -eq "transcript" -Or $dir -eq "use" -Or $dir -eq "edify") {
         echo "  copy $dir to $env:EXIVITY_HOME_PATH/system/config/$dir"
         Copy-Item -Path "$backup_path/$backup_directory/$dir/*" -destination "$env:EXIVITY_HOME_PATH/system/config/$dir/" -Force
     }

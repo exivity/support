@@ -87,6 +87,11 @@ $backup_target_transcript="$backup_target/transcript"
 mkdir $backup_target_transcript | Out-Null
 Copy-Item -Path $env:EXIVITY_HOME_PATH/system/config/transcript/*.trs -Destination $backup_target_transcript -Force -Recurse
 
+echo "backup edify workflow steps..."
+$backup_target_edify="$backup_target/edify"
+mkdir $backup_target_edify | Out-Null
+Copy-Item -Path $env:EXIVITY_HOME_PATH/system/config/edify/PROXIMITY_Workflow_step* -Destination $backup_target_edify -Force -Recurse
+
 echo "backup rdf data files..."
 $backup_target_rdf="$backup_target/report"
 mkdir $backup_target_rdf | Out-Null
