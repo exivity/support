@@ -97,7 +97,7 @@ foreach ($dir in $restore_dirs) {
         $pg_user=$config_json.db.parameters.user
         $pg_password=$config_json.db.parameters.password
         $env:PGPASSWORD=$pg_password
-        Invoke-Expression -Command "$env:EXIVITY_PROGRAM_PATH/server/pgsql/bin/pg_restore.exe -c -h $pg_host -p $pg_port -U $pg_user -d $pg_dbname $backup_path/$backup_directory/$dir/database_backup.sql > Out-Null"
+        Invoke-Expression -Command "$env:EXIVITY_PROGRAM_PATH/server/pgsql/bin/pg_restore.exe --clean --no-acl --no-owner --disable-triggers -h $pg_host -p $pg_port -U $pg_user -d $pg_dbname $backup_path/$backup_directory/$dir/database_backup.sql > Out-Null"
     }
 }
 
