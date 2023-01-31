@@ -89,21 +89,11 @@ $SelfSignedCAFile = "rabbitmq-selfsigned.crt"
 $SelfSignedKey = "rabbitmq-selfsigned.key"
 $SelfSignedCRT = "rabbitmq-selfsigned.crt"
 
-if($Cert -eq "") {
-	
-	Write-Host "Creating OpenSSL config for self signed certficate generation..." $NewLine
-	$FileResponse = New-Item -Path $SelfSignConfLocation -Name $SelfSignConf -ItemType "file" -Value $SelfSignConfContent -force
-
-	Write-Host $NewLine
-
-	Write-Host "Generating self signed certs as no certs were provided..." $NewLine
-	openssl req -x509 -nodes -days 9999 -newkey rsa:2048 -keyout "$SelfSignedKey" -out "$SelfSignedCRT" -config "$SelfSignConfLocation\$SelfSignConf" -sha256
-}
-else{
-	$SelfSignedCAFile = $CA
-	$SelfSignedKey =  $Key
-	$SelfSignedCRT =  $Cert
-}
+Write-Host "Creating OpenSSL config for self signed certficate generation..." $NewLine
+$FileResponse = New-Item -Path $SelfSignConfLocation -Name $SelfSignConf -ItemType "file" -Value $SelfSignConfContent -force
+Write-Host $NewLine
+Write-Host "Generating self signed certs as no certs were provided..." $NewLine
+openssl req -x509 -nodes -days 9999 -newkey rsa:2048 -keyout "$SelfSignedKey" -out "$SelfSignedCRT" -config "$SelfSignConfLocation\$SelfSignConf" -sha256
 
 if($SelfSignedCAFile -eq "" -or $SelfSignedKey -eq "") {
 	Write-Host "Certificate CA or Key was not found or supplied. Exiting with code 111"
