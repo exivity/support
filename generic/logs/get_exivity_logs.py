@@ -81,10 +81,7 @@ else:
 if args.limit is None:
     limit = "100"
 
-# get a token for the endpoint
-#authenticate(url,username,password)
-
-# wipe the file
+# create a new file
 outfile="exivity_logs.log"
 f = open(outfile, "w")
 f.close()

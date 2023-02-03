@@ -87,6 +87,8 @@ foreach ($dir in $restore_dirs) {
         }
     }
     if ($dir -eq "db") {
+        # set path
+        $Env:PATH += ";$env:EXIVITY_PROGRAM_PATH/server/pgsql/bin"
         # read config
         $config_json=Get-Content $env:EXIVITY_HOME_PATH/system/config.json|ConvertFrom-Json
         # load psql vars
@@ -97,7 +99,11 @@ foreach ($dir in $restore_dirs) {
         $pg_user=$config_json.db.parameters.user
         $pg_password=$config_json.db.parameters.password
         $env:PGPASSWORD=$pg_password
-        Invoke-Expression -Command "$env:EXIVITY_PROGRAM_PATH/server/pgsql/bin/pg_restore.exe --clean --no-acl --no-owner --disable-triggers -h $pg_host -p $pg_port -U $pg_user -d $pg_dbname $backup_path/$backup_directory/$dir/database_backup.sql > Out-Null"
+        pg_restore.exe -c -h $pg_host -p $pg_port -U $pg_user --d $pg_dbname $backup_path/$backup_directory/$dir/database_backup.sql 2> Out-Null
+        $workflow_step=pg_restore -f - -Fc -t workflow_step $backup_path/$backup_directory/$dir/database_backup.sql
+        $workflow_step=$query.replace("SELECT pg_catalog.set_config('search_path', '', false);","")
+        echo "fix for workflow_step..."
+        $workflow_step|psql.exe -h $pg_host -p $pg_port -U $pg_user -d $pg_dbname 2> Out-Null
     }
 }
 

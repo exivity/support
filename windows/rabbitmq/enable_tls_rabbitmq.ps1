@@ -125,9 +125,8 @@ rabbitmq-service remove
 rabbitmq-service install
 rabbitmq-service start
 
-Write-Host "Waiting for RabbitMQ to be completely up.. waiting for 15 secs" $NewLine
-
-Start-Sleep -s 15
+Write-Host "Waiting for RabbitMQ to be completely up.. waiting for 30 secs" $NewLine
+Start-Sleep -s 30
 
 $SSLResponse = tnc localhost -p 5671
 
