@@ -1,44 +1,50 @@
-# Exivity Automated Installer for Morpheus
+# Exivity Automated Deployment (with NGINX Ingress + NFS RWX + K3s)
 
-This script provides a fully unattended installation of **Exivity** in a lightweight Kubernetes environment using **k3s**. It is intended for execution as an **Automation Task within Morpheus**, and performs the following tasks:
+This project provides a fully automated shell script to deploy [Exivity](https://www.exivity.com/) on a single Ubuntu host using:
 
-## ✅ What It Does
+- [K3s](https://k3s.io/) (Lightweight Kubernetes)
+- [Docker](https://www.docker.com/)
+- [Helm](https://helm.sh/)
+- [NGINX Ingress Controller](https://kubernetes.github.io/ingress-nginx/)
+- NFS server + dynamic RWX provisioning
+- Self-signed TLS for HTTPS (port 443)
+- Hostname binding based on the detected system hostname
 
-- Installs **Docker** on the target Ubuntu system
-- Installs **k3s** with Traefik as the Ingress controller
-- Sets up an **NFS-based RWX storage class** using the Ganesha server provisioner
-- Deploys **Exivity** via Helm with:
-  - `demo` license key
-  - self-signed TLS certificates
-  - Ingress hostname `exivity.local`
-  - `trustedProxy: "*"` for compatibility behind Traefik
-- Opens firewall port `30789` for external access
-- (Optionally) sets up `iptables` to forward port `443` to `30789` for clean HTTPS access
+## ⚙️ Requirements
 
-## 🌐 Accessing Exivity
+- Ubuntu 22.04+
+- Internet access for downloading packages and container images
+- Script should be run with root privileges (or via Morpheus automation task)
 
-Once installed, you can access Exivity in your browser:
+## 🚀 Usage
 
-```https://<your-k3s-host-ip>:30789```
+1. Run the script on a fresh VM or system.
+2. Access the Exivity UI using:
 
+```https://<your-hostname> (⚠️ self-signed cert)```
 
-For a cleaner URL, add this to your local machine's `/etc/hosts`:
+> 💡 If your client machine doesn't resolve the hostname, add it to your `/etc/hosts` file:
 
-```<your-k3s-host-ip>.exivity.local```
+```<ip-address> <hostname>```
 
-Then access:
+Example:
+`192.168.2.250 exivity.localdomain`
 
-```https://exivity.local```
+## 📦 What gets installed
 
+- K3s with Traefik disabled
+- NGINX Ingress Controller patched to expose ports 80 and 443 using hostPorts
+- Exivity Helm chart with NFS-based RWX storage
+- Firewall rules allowing inbound traffic on ports 80 and 443
+- StorageClass `nfs-client` for dynamic RWX provisioning
 
-> ⚠️ A self-signed certificate is used — your browser will display a security warning. You can safely bypass it in non-production environments.
+## 🧹 Clean Up
 
-## 🧩 Requirements
+To reset the system before a fresh run, use the provided cleanup script:
 
-- Ubuntu 20.04 or 22.04 VM or bare metal
-- Root or sudo access
-- Executed as a Morpheus automation task (or other provisioning platform)
+```./cleanup-exivity-deploy.sh```
+This removes Kubernetes resources, Helm releases, Docker volumes, and resets services.
 
-## 📥 License
+Support: For license requests or Exivity trial assistance, email license@exivity.com
 
-The script uses a `demo` license by default. Contact [license@exivity.com](mailto:license@exivity.com) for a trial or production license key.
+Note: This script is intended for lab, trial, and PoC environments only. Do not use it for production without appropriate review and hardening.

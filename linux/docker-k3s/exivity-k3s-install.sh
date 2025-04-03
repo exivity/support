@@ -1,44 +1,35 @@
 #!/bin/bash
+set -e
 
-set -euo pipefail
-
+### === System Prep ===
 echo "=== Updating system and installing dependencies ==="
-apt-get update -y
-apt-get install -y curl gnupg lsb-release ca-certificates apt-transport-https software-properties-common nfs-common ufw iptables
+export DEBIAN_FRONTEND=noninteractive
+apt-get update && apt-get install -y \
+  curl gnupg2 ca-certificates apt-transport-https \
+  software-properties-common lsb-release iptables ufw \
+  nfs-common
 
+### === Install Docker ===
 echo "=== Installing Docker ==="
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --batch --yes --dearmor -o /usr/share/keyrings/docker.gpg
-echo \
-  "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker.gpg] \
-  https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" \
-  > /etc/apt/sources.list.d/docker.list
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker.gpg
+echo "deb [arch=amd64 signed-by=/usr/share/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" > /etc/apt/sources.list.d/docker.list
+apt-get update && apt-get install -y docker-ce docker-ce-cli containerd.io
 
-apt-get update -y
-apt-get install -y docker-ce docker-ce-cli containerd.io
-usermod -aG docker "${SUDO_USER:-ubuntu}"
-
+### === Install k3s (without Traefik) ===
 echo "=== Installing k3s ==="
-/usr/bin/curl -sfL https://get.k3s.io | sh -
+curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--disable traefik" sh -
 export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 
-echo "=== Waiting for k3s to become ready ==="
-for i in {1..30}; do
-    if kubectl get nodes >/dev/null 2>&1; then
-        echo "✅ k3s is ready."
-        break
-    fi
-    echo "⏳ Waiting for k3s... (${i}/30)"
-    sleep 5
-done
-
+### === Install Helm ===
 echo "=== Installing Helm ==="
-curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+curl -fsSL https://raw.githubusercontent.com/helm/helm/master/scripts/get-helm-3 | bash
 
-echo "=== Adding Helm repos ==="
-helm repo add exivity https://charts.exivity.com/
-helm repo add nfs-ganesha-server-and-external-provisioner https://kubernetes-sigs.github.io/nfs-ganesha-server-and-external-provisioner/
+### === Add Helm Repos ===
+helm repo add exivity https://charts.exivity.com
+helm repo add nfs-ganesha-server-and-external-provisioner https://kubernetes-sigs.github.io/nfs-ganesha-server-and-external-provisioner
 helm repo update
 
+### === Deploy NFS Provisioner (RWX support) ===
 echo "=== Installing NFS RWX provisioner ==="
 helm install nfs-server nfs-ganesha-server-and-external-provisioner/nfs-server-provisioner \
   --namespace nfs-server \
@@ -57,30 +48,54 @@ helm install nfs-server nfs-ganesha-server-and-external-provisioner/nfs-server-p
   --set 'storageClass.mountOptions[6]=noatime' \
   --set 'storageClass.mountOptions[7]=nodiratime'
 
-# Detect IP of host for ingress (safe for Morpheus VMs)
-EXIVITY_HOST=$(hostname -I | awk '{print $1}')
-echo "=== Using ingress host: $EXIVITY_HOST ==="
+### === Installing NGINX Ingress Controller ===
+echo "=== Installing NGINX Ingress Controller ==="
+kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.10.0/deploy/static/provider/baremetal/deploy.yaml
 
-echo "=== Installing Exivity Helm chart ==="
+### === Wait for Ingress Controller Ready ===
+kubectl rollout status deployment ingress-nginx-controller -n ingress-nginx --timeout=180s
+
+### === Patch ingress controller to expose ports 80/443 ===
+echo "=== Patching ingress-nginx-controller to bind to host ports ==="
+kubectl patch deployment ingress-nginx-controller -n ingress-nginx \
+  --type=json \
+  -p='[
+    {"op": "add", "path": "/spec/template/spec/containers/0/ports/0/hostPort", "value": 80},
+    {"op": "add", "path": "/spec/template/spec/containers/0/ports/1/hostPort", "value": 443}
+  ]'
+
+### === Wait for admission webhook to be available ===
+echo "=== Waiting for ingress-nginx admission webhook to become available ==="
+kubectl wait --namespace ingress-nginx \
+  --for=condition=complete job/ingress-nginx-admission-create \
+  --timeout=90s || true
+
+kubectl wait --namespace ingress-nginx \
+  --for=condition=complete job/ingress-nginx-admission-patch \
+  --timeout=90s || true
+
+sleep 5
+
+### === Installing Exivity ===
+echo "=== Installing Exivity ==="
+EXTERNAL_IP=$(hostname -I | awk '{print $1}')
+EXTERNAL_HOSTNAME=$(hostname -f)
 helm upgrade --install exivity exivity/exivity \
   --namespace exivity \
   --create-namespace \
+  --wait \
   --set licence=demo \
-  --set storage.storageClass=nfs-client \
   --set ingress.enabled=true \
-  --set ingress.host="$EXIVITY_HOST" \
-  --set ingress.tls.enabled=true \
-  --set ingress.tls.secret="-" \
-  --set ingress.tls.hosts[0]="$EXIVITY_HOST" \
+  --set ingress.host=${EXTERNAL_HOSTNAME} \
   --set ingress.trustedProxy="*" \
-  --wait
+  --set ingress.annotations."kubernetes\.io/ingress\.class"=nginx \
+  --set ingress.ingressClassName=nginx \
+  --set ingress.tls.enabled=true \
+  --set ingress.tls.secret="exivity-tls" \
+  --set storage.storageClass=nfs-client
 
-echo "=== Opening NodePort 30789 in UFW ==="
-ufw allow 30789/tcp || true
-
-echo "=== (Optional) Forwarding port 443 to 30789 via iptables ==="
-iptables -t nat -A PREROUTING -p tcp --dport 443 -j REDIRECT --to-port 30789 || true
-
-echo "=== ✅ Exivity is installed and ready ==="
-echo "Access it at: https://$EXIVITY_HOST:30789"
-echo "Or configure DNS/hosts entry pointing to: $EXIVITY_HOST"
+echo "=== Deployment complete. Exivity should now be accessible at:"
+echo "    https://${EXTERNAL_HOSTNAME}"
+echo ""
+echo "Note: If the hostname is not resolvable, you can add the following line to your /etc/hosts file:"
+echo "    ${EXTERNAL_IP} ${EXTERNAL_HOSTNAME}"
