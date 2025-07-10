@@ -131,6 +131,8 @@ class ExivityAPI:
         
         print(f"DEBUG: Creating rate for account_id={account_id}, service_id={service_id}, rate={rate}, cogs={cogs}, date={formatted_date}")
         
+        last_error = None  # Track the last error for final exception
+        
         # Approach 1: v2 atomic operations (original working version)
         try:
             operation = {
@@ -173,6 +175,7 @@ class ExivityAPI:
             
         except Exception as e:
             print(f"DEBUG: v2 atomic rate creation failed: {e}")
+            last_error = e
         
         # Approach 2: v1 API standard creation
         try:
@@ -211,6 +214,7 @@ class ExivityAPI:
             
         except Exception as e:
             print(f"DEBUG: v1 rate creation failed: {e}")
+            last_error = e
         
         # Approach 3: Simplified v2 rate creation
         try:
@@ -240,9 +244,10 @@ class ExivityAPI:
             
         except Exception as e:
             print(f"DEBUG: Simplified v2 rate creation failed: {e}")
+            last_error = e
         
         # If all approaches fail, raise the last exception
-        raise Exception(f"All rate creation approaches failed. Last error: {e}")
+        raise Exception(f"All rate creation approaches failed. Last error: {last_error}")
 
     def create_rate_revisions_batch(self, rate_data: List[Dict]) -> Dict:
         """Create multiple rate revisions using atomic operations - exact copy from working version"""
