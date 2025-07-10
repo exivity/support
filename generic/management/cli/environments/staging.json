@@ -1,0 +1,10 @@
+{
+  "name": "staging",
+  "description": "Staging environment",
+  "api_url": "https://staging-api.exivity.com",
+  "settings": {
+    "timeout": 45,
+    "retry_count": 5,
+    "debug": false
+  }
+}

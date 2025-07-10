@@ -1,0 +1,2 @@
+# This file ensures the csv folder is tracked in git
+# Place your CSV files in this directory for easy access through the CLI
