@@ -1,0 +1,10 @@
+{
+  "name": "production",
+  "description": "Production environment",
+  "api_url": "https://api.exivity.com",
+  "settings": {
+    "timeout": 60,
+    "retry_count": 5,
+    "debug": false
+  }
+}

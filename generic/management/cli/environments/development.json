@@ -1,0 +1,10 @@
+{
+  "name": "development",
+  "description": "Development environment",
+  "api_url": "https://dev-api.exivity.com",
+  "settings": {
+    "timeout": 30,
+    "retry_count": 3,
+    "debug": true
+  }
+}
