@@ -91,15 +91,38 @@ class ExivityAPI:
         else:
             formatted_date = effective_date
             
-        # Use v1 API for rates as v2 might not support all rate operations yet
-        params = {
-            "filter[account_id]": account_id,
-            "filter[service_id]": service_id,
-            "filter[effective_date]": f"={formatted_date}"
-        }
-        resp = self._request("GET", "/v1/rates", params=params)
-        data = resp.json().get("data", [])
-        return len(data) > 0
+        # Try v2 API first, fall back to v1 if needed
+        try:
+            params = {
+                "filter[account_id]": account_id,
+                "filter[service_id]": service_id,
+                "filter[effective_date]": f"={formatted_date}"
+            }
+            resp = self._request("GET", "/v2/rates", params=params)
+            data = resp.json().get("data", [])
+            return len(data) > 0
+        except Exception as e:
+            print(f"DEBUG: v2 rates API failed: {e}")
+            print("DEBUG: Falling back to v1 rates API for checking...")
+            
+            # Fall back to v1 API
+            try:
+                params = {
+                    "filter[account_id]": account_id,
+                    "filter[service_id]": service_id,
+                    "filter[effective_date]": f"={formatted_date}"
+                }
+                headers = {
+                    "Content-Type": "application/vnd.api+json",
+                    "Accept": "application/vnd.api+json"
+                }
+                resp = self._request("GET", "/v1/rates", params=params, headers=headers)
+                data = resp.json().get("data", [])
+                return len(data) > 0
+            except Exception as e2:
+                print(f"DEBUG: v1 rates API also failed: {e2}")
+                # If both fail, assume it doesn't exist
+                return False
 
     def create_rate_revision(
         self,
@@ -115,466 +138,119 @@ class ExivityAPI:
         else:
             formatted_date = effective_date
             
-        # Use v1 API for rates
-        payload = {
+        # Use v2 atomic operations for single rate creation
+        import uuid
+        
+        operation = {
+            "op": "add",
             "data": {
                 "type": "rate",
                 "attributes": {
                     "rate": rate,
+                    "rate_col": None,
+                    "min_commit": None,
+                    "effective_date": formatted_date,
+                    "end_date": None,
+                    "fixed": None,
+                    "fixed_col": None,
                     "cogs_rate": cogs,
-                    "effective_date": formatted_date
+                    "cogs_rate_col": None,
+                    "cogs_fixed": None,
+                    "cogs_fixed_col": None,
+                    "tier_aggregation_level": None
                 },
                 "relationships": {
-                    "service": {"data": {"type": "service", "id": str(service_id)}},
-                    "account": {"data": {"type": "account", "id": str(account_id)}}
-                }
+                    "service": {"data": {"id": str(service_id), "type": "service"}},
+                    "account": {"data": {"type": "account", "id": str(account_id)}},
+                    "ratetiers": {"data": []}
+                },
+                "lid": str(uuid.uuid4())
             }
         }
-        headers = {
-            "Content-Type": "application/vnd.api+json",
-            "Accept": "application/vnd.api+json"
-        }
-        self._request("POST", "/v1/rates", json=payload, headers=headers)
-
-    # ------------------------- environments ------------------------- #
-    def get_environments(self) -> Dict[str, Dict]:
-        """Get existing environments, returns dict of name -> {id, variables, default_flag}"""
-        # Use v2 API with proper pagination parameters like the GUI
-        resp = self._request("GET", "/v2/environments?page[offset]=0&page[limit]=-1&include=variables")
-        response_data = resp.json()
-        data = response_data.get("data", [])
-        included = response_data.get("included", [])
         
-        # Debug: Print raw API response structure
-        print(f"DEBUG: Total data items: {len(data)}")
-        print(f"DEBUG: Total included items: {len(included)}")
-        
-        # Debug: Show what's in included
-        variable_count = len([item for item in included if item["type"] == "variable"])
-        print(f"DEBUG: Found {variable_count} variables in included data")
-        
-        # First, create a map of environment names to IDs
-        env_name_to_id = {}
-        for env in data:
-            env_name = env["attributes"]["name"]
-            env_id = env["id"]
-            env_name_to_id[env_name] = env_id
-        
-        # Build a map of variables by environment using the hour variable logic
-        # Since the variables have "hour" values like "00", "01", "02", etc.
-        # we can match them to environments H00, H01, H02, etc.
-        variables_by_env = {}
-        for item in included:
-            if item["type"] == "variable":
-                var_name = item["attributes"]["name"]
-                var_value = item["attributes"]["value"]
-                
-                # Special logic for hour variables - map them by value
-                if var_name == "hour" and len(var_value) == 2 and var_value.isdigit():
-                    expected_env_name = f"H{var_value}"
-                    if expected_env_name in env_name_to_id:
-                        env_id = env_name_to_id[expected_env_name]
-                        if env_id not in variables_by_env:
-                            variables_by_env[env_id] = {}
-                        variables_by_env[env_id][var_name] = var_value
-                        print(f"DEBUG: Mapped variable '{var_name}' = '{var_value}' to env {expected_env_name} (ID: {env_id})")
-                    else:
-                        print(f"DEBUG: No environment found for hour value '{var_value}' (expected {expected_env_name})")
-                else:
-                    print(f"DEBUG: Non-hour variable '{var_name}' = '{var_value}' - skipping relationship mapping")
-        
-        print(f"DEBUG: variables_by_env has {len(variables_by_env)} environments with variables")
-        
-        result = {}
-        for env in data:
-            env_id = env["id"]
-            env_name = env["attributes"]["name"]
-            
-            # Get variables for this environment
-            env_variables = variables_by_env.get(env_id, {})
-            
-            result[env_name] = {
-                "id": env_id,
-                "variables": env_variables,
-                "default_flag": env["attributes"].get("default_flag", False)
-            }
-            
-            # Debug: Show what we got for each hourly environment
-            if env_name.startswith('H') and len(env_name) == 3:
-                print(f"DEBUG: {env_name} (ID: {env_id}) has variables: {list(env_variables.keys())}")
-        
-        return result
-
-    def create_environment_with_variable(self, env_name: str, var_name: str, var_value: str) -> str:
-        """Create environment and variable using atomic operations"""
-        operations = [
-            {
-                "op": "add",
-                "data": {
-                    "type": "environment",
-                    "lid": "new_env",
-                    "attributes": {
-                        "name": env_name,
-                        "default_flag": False
-                    }
-                }
-            },
-            {
-                "op": "add", 
-                "data": {
-                    "type": "variable",
-                    "attributes": {
-                        "name": var_name,
-                        "value": var_value,
-                        "encrypted": False
-                    },
-                    "relationships": {
-                        "environment": {
-                            "data": {
-                                "type": "environment",
-                                "lid": "new_env"
-                            }
-                        }
-                    }
-                }
-            }
-        ]
-        
-        payload = {"atomic:operations": operations}
+        payload = {"atomic:operations": [operation]}
         headers = {
             "Content-Type": "application/vnd.api+json;ext=\"https://jsonapi.org/ext/atomic\"",
             "Accept": "application/vnd.api+json"
         }
         
-        resp = self._request("POST", "/v2/", json=payload, headers=headers)
-        result = resp.json()
-        return result["atomic:results"][0]["data"]["id"]
-
-    def add_variable_to_environment(self, env_id: str, var_name: str, var_value: str):
-        """Add a variable to an existing environment"""
-        payload = {
-            "data": {
-                "type": "variable",
-                "attributes": {
-                    "name": var_name,
-                    "value": var_value,
-                    "encrypted": False
-                },
-                "relationships": {
-                    "environment": {
-                        "data": {
-                            "type": "environment",
-                            "id": env_id
-                        }
+        try:
+            self._request("POST", "/v2/", json=payload, headers=headers)
+        except Exception as e:
+            print(f"DEBUG: v2 atomic rate creation failed: {e}")
+            print("DEBUG: Falling back to v1 rate creation...")
+            
+            # Fall back to v1 API
+            payload_v1 = {
+                "data": {
+                    "type": "rate",
+                    "attributes": {
+                        "rate": rate,
+                        "rate_col": None,
+                        "min_commit": None,
+                        "effective_date": formatted_date,
+                        "end_date": None,
+                        "fixed": None,
+                        "fixed_col": None,
+                        "cogs_rate": cogs,
+                        "cogs_rate_col": None,
+                        "cogs_fixed": None,
+                        "cogs_fixed_col": None,
+                        "tier_aggregation_level": None
+                    },
+                    "relationships": {
+                        "service": {"data": {"id": str(service_id), "type": "service"}},
+                        "account": {"data": {"type": "account", "id": str(account_id)}}
                     }
                 }
             }
-        }
-        headers = {
-            "Content-Type": "application/vnd.api+json",
-            "Accept": "application/vnd.api+json"
-        }
-        self._request("POST", "/v2/variables", json=payload, headers=headers)
-
-    def ensure_hourly_environments(self) -> Dict[str, str]:
-        """Ensure all H00-H23 environments exist with hour variables"""
-        print("Checking/creating hourly environments...")
-        existing_envs = self.get_environments()
-        env_map = {}
-        
-        for hour in range(24):
-            env_name = f"H{hour:02d}"
-            hour_str = f"{hour:02d}"
-            
-            if env_name in existing_envs:
-                env_info = existing_envs[env_name]
-                env_id = env_info["id"]
-                print(f"Environment {env_name} already exists (ID: {env_id})")
-                
-                # Check if hour variable exists and has correct value
-                if "hour" not in env_info["variables"]:
-                    try:
-                        self.add_variable_to_environment(env_id, "hour", hour_str)
-                        print(f"Created variable 'hour' = '{hour_str}' in {env_name}")
-                    except Exception as e:
-                        # 422 might mean variable already exists - check again
-                        if "422" in str(e):
-                            print(f"Variable might already exist in {env_name}, checking...")
-                        else:
-                            print(f"Warning: Could not create variable in {env_name}: {e}")
-                elif env_info["variables"]["hour"] != hour_str:
-                    print(f"Variable 'hour' in {env_name} has wrong value: '{env_info['variables']['hour']}' (should be '{hour_str}')")
-                else:
-                    print(f"Variable 'hour' already exists in {env_name} with correct value")
-                
-                env_map[env_name] = env_id
-            else:
-                print(f"Environment {env_name} does not exist, creating it...")
-                # Try atomic operations first, fall back to individual creation
-                try:
-                    env_id = self.create_environment_with_variable(env_name, "hour", hour_str)
-                    print(f"Created environment {env_name} (ID: {env_id}) with variable 'hour' = '{hour_str}'")
-                    env_map[env_name] = env_id
-                except Exception as e:
-                    print(f"Warning: Atomic operation failed for {env_name}: {e}")
-                    # Fall back to individual creation
-                    try:
-                        env_id = self.create_environment_individually(env_name)
-                        self.add_variable_to_environment(env_id, "hour", hour_str)
-                        print(f"Created environment {env_name} (ID: {env_id}) with variable 'hour' = '{hour_str}' (fallback)")
-                        env_map[env_name] = env_id
-                    except Exception as e2:
-                        print(f"Error: Could not create environment {env_name}: {e2}")
-        
-        # Verify all environments were found/created
-        missing_envs = []
-        for hour in range(24):
-            env_name = f"H{hour:02d}"
-            if env_name not in env_map:
-                missing_envs.append(env_name)
-        
-        if missing_envs:
-            print(f"Error: Missing environments: {', '.join(missing_envs)}")
-            raise RuntimeError(f"Could not find all required environments. Missing: {missing_envs}")
-        
-        print(f"✅ All 24 hourly environments confirmed to exist")
-        return env_map
-
-    def create_environment_individually(self, env_name: str) -> str:
-        """Create just an environment without variables"""
-        payload = {
-            "data": {
-                "type": "environment",
-                "attributes": {
-                    "name": env_name,
-                    "default_flag": False
-                }
+            headers_v1 = {
+                "Content-Type": "application/vnd.api+json",
+                "Accept": "application/vnd.api+json"
             }
-        }
-        headers = {
-            "Content-Type": "application/vnd.api+json",
-            "Accept": "application/vnd.api+json"
-        }
-        resp = self._request("POST", "/v2/environments", json=payload, headers=headers)
-        return resp.json()["data"]["id"]
+            self._request("POST", "/v1/rates", json=payload_v1, headers=headers_v1)
 
-    def delete_environment(self, env_id: str):
-        """Delete an environment"""
-        headers = {
-            "Content-Type": "application/vnd.api+json",
-            "Accept": "application/vnd.api+json"
-        }
-        self._request("DELETE", f"/v2/environments/{env_id}", headers=headers)
-
-    def delete_hourly_environments(self) -> None:
-        """Delete all H00-H23 environments, handling default environment properly"""
-        print("Checking for hourly environments to delete...")
-        existing_envs = self.get_environments()
-        
-        # Separate default and non-default environments
-        default_env = None
-        non_default_envs = []
-        
-        for hour in range(24):
-            env_name = f"H{hour:02d}"
-            
-            if env_name in existing_envs:
-                env_info = existing_envs[env_name]
-                if env_info["default_flag"]:
-                    default_env = (env_name, env_info["id"])
-                else:
-                    non_default_envs.append((env_name, env_info["id"]))
-        
-        deleted_count = 0
-        
-        # First, delete all non-default environments
-        for env_name, env_id in non_default_envs:
-            try:
-                self.delete_environment(env_id)
-                print(f"Deleted environment {env_name} (ID: {env_id})")
-                deleted_count += 1
-            except Exception as e:
-                print(f"Error: Could not delete environment {env_name}: {e}")
-        
-        # Finally, delete the default environment if it exists
-        if default_env:
-            env_name, env_id = default_env
-            try:
-                self.delete_environment(env_id)
-                print(f"Deleted default environment {env_name} (ID: {env_id})")
-                deleted_count += 1
-            except Exception as e:
-                print(f"Error: Could not delete default environment {env_name}: {e}")
-        
-        # Check for environments that don't exist
-        for hour in range(24):
-            env_name = f"H{hour:02d}"
-            if env_name not in existing_envs:
-                print(f"Environment {env_name} does not exist, skipping...")
-        
-        print(f"Deleted {deleted_count} hourly environments.")
-
-    def list_hourly_environments(self) -> Dict[str, str]:
-        """List status of all H00-H23 environments"""
-        print("Current status of hourly environments (H00-H23):")
-        print("-" * 70)
-        existing_envs = self.get_environments()
-        env_map = {}
-        
-        # Debug: Show what environments we found
-        print(f"DEBUG: API returned {len(existing_envs)} total environments")
-        hourly_envs_found = [name for name in existing_envs.keys() if name.startswith('H') and len(name) == 3]
-        print(f"DEBUG: Found hourly environments: {sorted(hourly_envs_found)}")
-        print("-" * 70)
-        
-        for hour in range(24):
-            env_name = f"H{hour:02d}"
-            
-            if env_name in existing_envs:
-                env_info = existing_envs[env_name]
-                env_id = env_info["id"]
-                variables = env_info["variables"]
-                is_default = env_info["default_flag"]
-                
-                has_hour_var = "hour" in variables
-                hour_value = ""
-                if has_hour_var:
-                    actual_hour_value = variables["hour"]
-                    hour_value = f" (hour='{actual_hour_value}')"
-                    if actual_hour_value != f"{hour:02d}":
-                        hour_value += f" ⚠️  WRONG VALUE (should be '{hour:02d}')"
-                else:
-                    hour_value = " ❌ NO HOUR VARIABLE"
-                
-                default_flag = " [DEFAULT]" if is_default else ""
-                status = f"✓ EXISTS (ID: {env_id}){hour_value}{default_flag}"
-                env_map[env_name] = env_id
-            else:
-                status = "✗ MISSING"
-            
-            print(f"{env_name}: {status}")
-        
-        print("-" * 70)
-        existing_count = len(env_map)
-        print(f"Total: {existing_count}/24 environments exist")
-        
-        if existing_count < 24:
-            missing = [f"H{h:02d}" for h in range(24) if f"H{h:02d}" not in env_map]
-            print(f"Missing: {', '.join(missing)}")
-        
-        return env_map
-
-    # ------------------------- workflows ------------------------- #
-    def create_workflow(self, name: str, description: str = "") -> str:
-        payload = {
-            "data": {
-                "type": "workflow",
-                "attributes": {"name": name, "description": description}
-            }
-        }
-        headers = {
-            "Content-Type": "application/vnd.api+json",
-            "Accept": "application/vnd.api+json"
-        }
-        resp = self._request("POST", "/v2/workflows", json=payload, headers=headers)
-        return resp.json()["data"]["id"]
-
-    def add_workflow_step(
-        self,
-        workflow_id: str,
-        step_order: int,
-        step_type: str,
-        attributes: Dict
-    ):
-        payload = {
-            "data": {
-                "type": "workflowstep",
-                "attributes": {
-                    "order": step_order,           # added order field
-                    "type": step_type,
-                    **attributes
-                },
-                "relationships": {
-                    "workflow": {"data": {"type": "workflow", "id": workflow_id}}
-                }
-            }
-        }
-        headers = {
-            "Content-Type": "application/vnd.api+json",
-            "Accept": "application/vnd.api+json"
-        }
-        self._request("POST", "/v2/workflowsteps", json=payload, headers=headers)
-
-    def find_workflows_by_name(self, name: str) -> List[str]:
-        """Return list of workflow IDs matching name."""
-        params = {"filter[name]": f"={name}"}
-        resp = self._request("GET", "/v2/workflows", params=params)
-        return [item["id"] for item in resp.json().get("data", [])]
-
-    def delete_workflow(self, workflow_id: str):
-        """Delete a workflow by ID."""
-        self._request("DELETE", f"/v2/workflows/{workflow_id}")
-
-    def create_workflow_with_steps(self, name: str, description: str, steps: List[Dict]) -> str:
-        """Create workflow with steps using atomic operations"""
+    def create_rate_revisions_batch(self, rate_data: List[Dict]) -> Dict:
+        """Create multiple rate revisions using atomic operations"""
         import uuid
         
-        workflow_lid = str(uuid.uuid4())
         operations = []
         
-        # First operation: create the workflow with proper relationships
-        operations.append({
-            "op": "add",
-            "data": {
-                "type": "workflow",
-                "attributes": {
-                    "name": name,
-                    "description": description
-                },
-                "relationships": {
-                    "steps": {"data": []},
-                    "schedules": {"data": []}
-                },
-                "lid": workflow_lid
-            }
-        })
-        
-        # Create steps with proper linking
-        previous_step_lid = None
-        for step in steps:
-            step_lid = str(uuid.uuid4())
+        for rate in rate_data:
+            # Convert date format from YYYYMMDD to YYYY-MM-DD for API
+            effective_date = rate["effective_date"]
+            if len(effective_date) == 8 and effective_date.isdigit():
+                formatted_date = f"{effective_date[:4]}-{effective_date[4:6]}-{effective_date[6:8]}"
+            else:
+                formatted_date = effective_date
             
-            # Convert our step format to the v2 API format
-            step_operation = {
+            operation = {
                 "op": "add",
                 "data": {
-                    "type": "workflowstep",
+                    "type": "rate",
                     "attributes": {
-                        "step_type": step["type"],
-                        "options": step["attributes"],
-                        "wait": True,
-                        "timeout": 3600
+                        "rate": float(rate["rate"]),
+                        "rate_col": None,
+                        "min_commit": None,
+                        "effective_date": formatted_date,
+                        "end_date": None,
+                        "fixed": None,
+                        "fixed_col": None,
+                        "cogs_rate": float(rate["cogs"]),
+                        "cogs_rate_col": None,
+                        "cogs_fixed": None,
+                        "cogs_fixed_col": None,
+                        "tier_aggregation_level": None
                     },
                     "relationships": {
-                        "workflow": {
-                            "data": {
-                                "lid": workflow_lid,
-                                "type": "workflow"
-                            }
-                        },
-                        "previous": {
-                            "data": {
-                                "lid": previous_step_lid,
-                                "type": "workflowstep"
-                            } if previous_step_lid else None
-                        }
+                        "service": {"data": {"id": str(rate["service_id"]), "type": "service"}},
+                        "account": {"data": {"type": "account", "id": str(rate["account_id"])}},
+                        "ratetiers": {"data": []}
                     },
-                    "lid": step_lid
+                    "lid": str(uuid.uuid4())
                 }
             }
-            
-            operations.append(step_operation)
-            previous_step_lid = step_lid
+            operations.append(operation)
         
         payload = {"atomic:operations": operations}
         headers = {
@@ -583,8 +259,7 @@ class ExivityAPI:
         }
         
         resp = self._request("POST", "/v2/", json=payload, headers=headers)
-        result = resp.json()
-        return result["atomic:results"][0]["data"]["id"]
+        return resp.json()
 
 # ------------------------- CLI helpers ------------------------- #
 
@@ -653,7 +328,9 @@ def update_rates_from_csv(api: ExivityAPI, csv_path: str):
             sys.exit(1)
 
         print(f"Processing CSV file: {csv_path}")
-        processed_count = 0
+        
+        # Collect all rate data and check for existing revisions
+        new_rates = []
         skipped_count = 0
         
         for row_num, row in enumerate(reader, start=2):  # Start at 2 since row 1 is headers
@@ -667,14 +344,21 @@ def update_rates_from_csv(api: ExivityAPI, csv_path: str):
                 cogs = float(cleaned_row["cogs"])
                 eff_date = cleaned_row["revision_start_date"]
                 
+                # Check if rate revision already exists
                 if api.rate_revision_exists(acc, svc, eff_date):
                     print(f"Row {row_num}: Rate revision already exists for account {acc}, service {svc} on {eff_date} – skipping.")
                     skipped_count += 1
                     continue
-                    
-                api.create_rate_revision(acc, svc, rate, cogs, eff_date)
-                print(f"Row {row_num}: Created rate revision for account {acc}, service {svc} ({eff_date})")
-                processed_count += 1
+                
+                # Add to batch for creation
+                new_rates.append({
+                    "account_id": acc,
+                    "service_id": svc,
+                    "rate": rate,
+                    "cogs": cogs,
+                    "effective_date": eff_date,
+                    "row_num": row_num
+                })
                 
             except ValueError as e:
                 print(f"Row {row_num}: Invalid data format - {e}")
@@ -685,10 +369,49 @@ def update_rates_from_csv(api: ExivityAPI, csv_path: str):
                 print(f"Row {row_num}: Data: {row}")
                 continue
         
+        # Create rates in batches using atomic operations
+        processed_count = 0
+        if new_rates:
+            # Process in batches of 50 to avoid too large requests
+            batch_size = 50
+            for i in range(0, len(new_rates), batch_size):
+                batch = new_rates[i:i+batch_size]
+                
+                try:
+                    print(f"Creating batch of {len(batch)} rate revisions...")
+                    result = api.create_rate_revisions_batch(batch)
+                    
+                    # Count successful creations
+                    atomic_results = result.get("atomic:results", [])
+                    successful_in_batch = len([r for r in atomic_results if "data" in r])
+                    processed_count += successful_in_batch
+                    
+                    for rate in batch:
+                        print(f"Row {rate['row_num']}: Created rate revision for account {rate['account_id']}, service {rate['service_id']} ({rate['effective_date']})")
+                    
+                except Exception as e:
+                    print(f"Error creating batch: {e}")
+                    # Fall back to individual creation for this batch
+                    print("Falling back to individual rate creation...")
+                    for rate in batch:
+                        try:
+                            api.create_rate_revision(
+                                rate["account_id"], 
+                                rate["service_id"], 
+                                rate["rate"], 
+                                rate["cogs"], 
+                                rate["effective_date"]
+                            )
+                            print(f"Row {rate['row_num']}: Created rate revision for account {rate['account_id']}, service {rate['service_id']} ({rate['effective_date']})")
+                            processed_count += 1
+                        except Exception as e2:
+                            print(f"Row {rate['row_num']}: Error creating individual rate - {e2}")
+        
         print(f"✅ Finished processing CSV:")
         print(f"   - Processed: {processed_count} rows")
         print(f"   - Skipped: {skipped_count} rows")
 
+# ------------------------- CLI helpers ------------------------- #
 
 def interactive_step_builder() -> tuple[List[Dict], str, str]:
     """Build workflow steps interactively, returns (steps, from_offset, to_offset)"""
