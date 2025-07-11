@@ -104,8 +104,6 @@ class RateManager:
                 with open(csv_path, 'r', newline='', encoding=encoding) as f:
                     # Read first line to check headers
                     first_line = f.readline().strip()
-                    print(f"DEBUG: First line with {encoding} encoding: '{first_line}'")
-                    print(f"DEBUG: First line bytes: {first_line.encode('utf-8')}")
                     
                     # Reset file pointer
                     f.seek(0)
@@ -113,13 +111,9 @@ class RateManager:
                     reader = csv.DictReader(f)
                     fieldnames = reader.fieldnames
                     
-                    print(f"DEBUG: Detected fieldnames: {fieldnames}")
-                    print(f"DEBUG: Fieldnames as list: {list(fieldnames) if fieldnames else 'None'}")
-                    
                     # Clean fieldnames (remove any hidden characters)
                     if fieldnames:
                         cleaned_fieldnames = [field.strip().replace('\ufeff', '') for field in fieldnames]
-                        print(f"DEBUG: Cleaned fieldnames: {cleaned_fieldnames}")
                         
                         # Check if we have the required columns after cleaning
                         required_cols = {"account_id", "service_id", "rate", "cogs", "revision_start_date"}
@@ -174,16 +168,15 @@ class RateManager:
                 return
 
             print(f"Processing CSV file: {csv_path}")
-            print(f"DEBUG: Header row (row 1) contains: {reader.fieldnames}")
             
             # Collect all rate data and check for existing revisions using dump data
             new_rates = []
             skipped_count = 0
             processed_rows = 0
+            error_rows = 0
             
             for row_num, row in enumerate(reader, start=2):  # Start at 2 since row 1 is headers
                 processed_rows += 1
-                print(f"DEBUG: Processing row {row_num} (data row {processed_rows}): {row}")
                 
                 try:
                     # Clean the row data (remove any hidden characters)
@@ -194,8 +187,6 @@ class RateManager:
                     rate = float(cleaned_row["rate"])
                     cogs = float(cleaned_row["cogs"])
                     eff_date = cleaned_row["revision_start_date"]
-                    
-                    print(f"DEBUG: Parsed data - Account: {acc}, Service: {svc}, Rate: {rate}, COGS: {cogs}, Date: {eff_date}")
                     
                     # Convert date format for lookup
                     if len(eff_date) == 8 and eff_date.isdigit():
@@ -221,27 +212,35 @@ class RateManager:
                     
                 except ValueError as e:
                     print(f"Row {row_num}: Invalid data format - {e}")
-                    print(f"Row {row_num}: Data: {row}")
+                    print(f"DEBUG: Row {row_num} data: {row}")
+                    error_rows += 1
                     continue
                 except Exception as e:
                     print(f"Row {row_num}: Error processing row - {e}")
-                    print(f"Row {row_num}: Data: {row}")
+                    print(f"DEBUG: Row {row_num} data: {row}")
+                    error_rows += 1
                     continue
             
-            print(f"DEBUG: Total data rows processed: {processed_rows}")
-            print(f"DEBUG: New rates to create: {len(new_rates)}")
-            print(f"DEBUG: Skipped existing rates: {skipped_count}")
+            print(f"📋 Summary:")
+            print(f"   • Total data rows processed: {processed_rows}")
+            print(f"   • New rates to create: {len(new_rates)}")
+            print(f"   • Skipped existing rates: {skipped_count}")
+            if error_rows > 0:
+                print(f"   • Rows with errors: {error_rows}")
             
             # Create rates in batches using atomic operations
             processed_count = 0
             if new_rates:
                 # Process in batches of 50 to avoid too large requests
                 batch_size = 50
+                total_batches = (len(new_rates) + batch_size - 1) // batch_size
+                
                 for i in range(0, len(new_rates), batch_size):
                     batch = new_rates[i:i+batch_size]
+                    batch_num = i // batch_size + 1
                     
                     try:
-                        print(f"Creating batch of {len(batch)} rate revisions...")
+                        print(f"Creating batch {batch_num}/{total_batches} ({len(batch)} rate revisions)...")
                         result = self.api.create_rate_revisions_batch(batch)
                         
                         # Count successful creations
@@ -249,13 +248,16 @@ class RateManager:
                         successful_in_batch = len([r for r in atomic_results if "data" in r])
                         processed_count += successful_in_batch
                         
-                        for rate in batch:
-                            print(f"Row {rate['row_num']}: Created rate revision for account {rate['account_id']}, service {rate['service_id']} ({rate['effective_date']})")
+                        if successful_in_batch == len(batch):
+                            print(f"✅ Batch {batch_num} completed successfully")
+                        else:
+                            print(f"⚠️  Batch {batch_num}: {successful_in_batch}/{len(batch)} created")
                         
                     except Exception as e:
-                        print(f"Error creating batch: {e}")
+                        print(f"❌ Batch {batch_num} failed: {e}")
+                        print(f"DEBUG: Batch error details: {e}")
                         # Fall back to individual creation for this batch
-                        print("Falling back to individual rate creation...")
+                        print("🔄 Falling back to individual rate creation...")
                         for rate in batch:
                             try:
                                 self.api.create_rate_revision(
@@ -265,19 +267,19 @@ class RateManager:
                                     rate["cogs"], 
                                     rate["effective_date"]
                                 )
-                                print(f"Row {rate['row_num']}: Created rate revision for account {rate['account_id']}, service {rate['service_id']} ({rate['effective_date']})")
                                 processed_count += 1
                             except Exception as e2:
-                                print(f"Row {rate['row_num']}: Error creating individual rate - {e2}")
+                                print(f"❌ Row {rate['row_num']}: Error creating individual rate - {e2}")
+                                print(f"DEBUG: Failed rate data: Account {rate['account_id']}, Service {rate['service_id']}, Rate {rate['rate']}, COGS {rate['cogs']}, Date {rate['effective_date']}")
             
             # Clear the dump cache after processing since we may have added new rates
             self.api.clear_dump_cache()
             
-            print(f"✅ Finished processing CSV:")
-            print(f"   - Total data rows in file: {processed_rows}")
-            print(f"   - Successfully processed: {processed_count} rows")
-            print(f"   - Skipped (already exist): {skipped_count} rows")
-            print(f"   - Errors: {processed_rows - processed_count - skipped_count} rows")
+            print(f"\n✅ Finished processing CSV:")
+            print(f"   • Total data rows in file: {processed_rows}")
+            print(f"   • Successfully processed: {processed_count} rows")
+            print(f"   • Skipped (already exist): {skipped_count} rows")
+            print(f"   • Errors: {processed_rows - processed_count - skipped_count} rows")
 
     def debug_api_connectivity(self):
         """Debug API connectivity and available endpoints"""
@@ -393,6 +395,318 @@ class RateManager:
             
         except Exception as e:
             print(f"❌ Error validating CSV: {e}")
+
+    def export_services_accounts_csv(self):
+        """Export comprehensive CSV of all services and accounts with rate information"""
+        print("📊 Generating comprehensive services and accounts export...")
+        
+        # Get output filename
+        default_filename = f"services_accounts_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        output_path = questionary.text(
+            "Output CSV filename:",
+            default=default_filename
+        ).ask()
+        
+        if not output_path:
+            print("❌ Output filename is required")
+            return
+        
+        # Ensure .csv extension
+        if not output_path.lower().endswith('.csv'):
+            output_path += '.csv'
+        
+        # Make path relative to CSV folder
+        if not os.path.isabs(output_path):
+            output_path = self.default_csv_folder / output_path
+            
+        try:
+            self._generate_services_accounts_export(output_path)
+        except Exception as e:
+            print(f"❌ Error generating export: {e}")
+
+    def _generate_services_accounts_export(self, output_path: Path):
+        """Generate the comprehensive export CSV file"""
+        print("📊 Loading system data...")
+        
+        # Fetch all data from dump
+        dump_data = self.api.fetch_dump_data()
+        accounts = dump_data.get('account', [])
+        services = dump_data.get('service', [])
+        rates = dump_data.get('rate', [])
+        
+        print(f"📋 Loaded:")
+        print(f"   • {len(accounts)} accounts")
+        print(f"   • {len(services)} services")
+        print(f"   • {len(rates)} rates")
+        
+        # Build lookup dictionaries
+        accounts_by_id = {account.get('id', ''): account for account in accounts}
+        services_by_id = {service.get('id', ''): service for service in services}
+        
+        # Build latest rates lookup by account/service
+        latest_rates = self._get_latest_rates_by_account_service(rates)
+        
+        print("🔄 Generating export data...")
+        
+        # Generate export rows
+        export_rows = []
+        
+        # For each service, create rows for each account
+        for service in services:
+            service_id = service.get('id', '')
+            service_key = service.get('key', '')
+            service_name = service.get('description', '') or service.get('name', '')
+            
+            if not service_id:
+                continue
+                
+            for account in accounts:
+                account_id = account.get('id', '')
+                account_name = account.get('name', '').strip('"')
+                account_level = account.get('level', '')
+                
+                if not account_id:
+                    continue
+                
+                # Look for rate for this account/service combination
+                rate_key = (account_id, service_id)
+                rate_info = latest_rates.get(rate_key)
+                
+                if rate_info:
+                    # Has account-specific rate
+                    revision_start_date = rate_info.get('effective_date', '')
+                    rate_value = rate_info.get('rate', '')
+                    cogs_value = rate_info.get('cogs_rate', '')
+                else:
+                    # No account-specific rate (using default)
+                    revision_start_date = ''
+                    rate_value = ''
+                    cogs_value = ''
+                
+                # Create export row
+                row = {
+                    'service_key': service_key,
+                    'service_name': service_name,
+                    'service_id': service_id,
+                    'account_key': account_name,  # Using name as key since there's no separate key field
+                    'account_name': account_name,
+                    'account_id': account_id,
+                    'report_level': account_level,
+                    'revision_start_date': revision_start_date,
+                    'rate': rate_value,
+                    'cogs': cogs_value
+                }
+                
+                export_rows.append(row)
+        
+        print(f"📋 Generated {len(export_rows)} export rows")
+        
+        # Write to CSV
+        print(f"💾 Writing to: {output_path}")
+        
+        # Ensure output directory exists
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        with open(output_path, 'w', newline='', encoding='utf-8-sig') as csvfile:
+            fieldnames = [
+                'service_key', 'service_name', 'service_id',
+                'account_key', 'account_name', 'account_id', 'report_level',
+                'revision_start_date', 'rate', 'cogs'
+            ]
+            
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(export_rows)
+        
+        print(f"✅ Export completed successfully!")
+        print(f"📄 File saved: {output_path}")
+        print(f"📊 Summary:")
+        print(f"   • Total rows: {len(export_rows)}")
+        
+        # Count rows with rates vs without
+        with_rates = len([row for row in export_rows if row['revision_start_date']])
+        without_rates = len(export_rows) - with_rates
+        
+        print(f"   • With account-specific rates: {with_rates}")
+        print(f"   • Using default rates: {without_rates}")
+        
+        # Show sample data
+        if export_rows:
+            print(f"\n📋 Sample data (first 3 rows):")
+            for i, row in enumerate(export_rows[:3]):
+                print(f"   Row {i+1}:")
+                print(f"     Service: {row['service_name']} (ID: {row['service_id']})")
+                print(f"     Account: {row['account_name']} (ID: {row['account_id']}, Level: {row['report_level']})")
+                if row['revision_start_date']:
+                    print(f"     Rate: {row['rate']} (COGS: {row['cogs']}) - Revision: {row['revision_start_date']}")
+                else:
+                    print(f"     Rate: Using default (no account-specific rate)")
+
+    def export_rates_only_csv(self):
+        """Export CSV of only accounts/services that have specific rate revisions"""
+        print("📊 Generating rates-only export...")
+        
+        # Get output filename
+        default_filename = f"rates_only_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        output_path = questionary.text(
+            "Output CSV filename:",
+            default=default_filename
+        ).ask()
+        
+        if not output_path:
+            print("❌ Output filename is required")
+            return
+        
+        # Ensure .csv extension
+        if not output_path.lower().endswith('.csv'):
+            output_path += '.csv'
+        
+        # Make path relative to CSV folder
+        if not os.path.isabs(output_path):
+            output_path = self.default_csv_folder / output_path
+            
+        try:
+            self._generate_rates_only_export(output_path)
+        except Exception as e:
+            print(f"❌ Error generating export: {e}")
+
+    def _generate_rates_only_export(self, output_path: Path):
+        """Generate export CSV with only accounts/services that have rate revisions"""
+        print("📊 Loading system data...")
+        
+        # Fetch all data from dump
+        dump_data = self.api.fetch_dump_data()
+        accounts = dump_data.get('account', [])
+        services = dump_data.get('service', [])
+        rates = dump_data.get('rate', [])
+        
+        print(f"📋 Loaded:")
+        print(f"   • {len(accounts)} accounts")
+        print(f"   • {len(services)} services")
+        print(f"   • {len(rates)} rates")
+        
+        # Build lookup dictionaries
+        accounts_by_id = {account.get('id', ''): account for account in accounts}
+        services_by_id = {service.get('id', ''): service for service in services}
+        
+        # Build latest rates lookup by account/service
+        latest_rates = self._get_latest_rates_by_account_service(rates)
+        
+        print("🔄 Generating export data for accounts with rates...")
+        
+        # Generate export rows only for combinations that have rates
+        export_rows = []
+        
+        for (account_id, service_id), rate_info in latest_rates.items():
+            account = accounts_by_id.get(account_id)
+            service = services_by_id.get(service_id)
+            
+            if not account or not service:
+                continue
+            
+            service_key = service.get('key', '')
+            service_name = service.get('description', '') or service.get('name', '')
+            account_name = account.get('name', '').strip('"')
+            account_level = account.get('level', '')
+            
+            revision_start_date = rate_info.get('effective_date', '')
+            rate_value = rate_info.get('rate', '')
+            cogs_value = rate_info.get('cogs_rate', '')
+            
+            # Create export row
+            row = {
+                'service_key': service_key,
+                'service_name': service_name,
+                'service_id': service_id,
+                'account_key': account_name,
+                'account_name': account_name,
+                'account_id': account_id,
+                'report_level': account_level,
+                'revision_start_date': revision_start_date,
+                'rate': rate_value,
+                'cogs': cogs_value
+            }
+            
+            export_rows.append(row)
+        
+        # Sort by account name, then service name
+        export_rows.sort(key=lambda x: (x['account_name'], x['service_name']))
+        
+        print(f"📋 Generated {len(export_rows)} export rows (rates only)")
+        
+        # Write to CSV
+        print(f"💾 Writing to: {output_path}")
+        
+        # Ensure output directory exists
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        with open(output_path, 'w', newline='', encoding='utf-8-sig') as csvfile:
+            fieldnames = [
+                'service_key', 'service_name', 'service_id',
+                'account_key', 'account_name', 'account_id', 'report_level',
+                'revision_start_date', 'rate', 'cogs'
+            ]
+            
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(export_rows)
+        
+        print(f"✅ Export completed successfully!")
+        print(f"📄 File saved: {output_path}")
+        print(f"📊 Summary:")
+        print(f"   • Total rows with rates: {len(export_rows)}")
+        
+        # Show account and service breakdown
+        unique_accounts = len(set(row['account_id'] for row in export_rows))
+        unique_services = len(set(row['service_id'] for row in export_rows))
+        
+        print(f"   • Unique accounts with rates: {unique_accounts}")
+        print(f"   • Unique services with rates: {unique_services}")
+        
+        # Show sample data
+        if export_rows:
+            print(f"\n📋 Sample data (first 3 rows):")
+            for i, row in enumerate(export_rows[:3]):
+                print(f"   Row {i+1}:")
+                print(f"     Service: {row['service_name']} (ID: {row['service_id']})")
+                print(f"     Account: {row['account_name']} (ID: {row['account_id']}, Level: {row['report_level']})")
+                print(f"     Rate: {row['rate']} (COGS: {row['cogs']}) - Revision: {row['revision_start_date']}")
+
+    def _get_latest_rates_by_account_service(self, rates: List[Dict]) -> Dict[tuple, Dict]:
+        """Get the latest rate for each account/service combination with data validation"""
+        latest_rates = {}
+        
+        for rate in rates:
+            account_id = rate.get('account_id', '')
+            service_id = rate.get('service_id', '')
+            effective_date = rate.get('effective_date', '')
+            
+            # Skip rows with empty or invalid account_id or service_id
+            if not account_id or not service_id or account_id == '' or service_id == '':
+                continue
+            
+            # Validate that account_id and service_id are numeric
+            try:
+                int(account_id)
+                int(service_id)
+            except (ValueError, TypeError):
+                print(f"   ⚠️  Skipping invalid rate data: account_id='{account_id}', service_id='{service_id}'")
+                continue
+            
+            # Validate rate values
+            try:
+                float(rate.get('rate', 0))
+                float(rate.get('cogs_rate', 0))
+            except (ValueError, TypeError):
+                print(f"   ⚠️  Skipping rate with invalid values: account_id={account_id}, service_id={service_id}")
+                continue
+            
+            key = (account_id, service_id)
+            
+            if key not in latest_rates or effective_date > latest_rates[key]['effective_date']:
+                latest_rates[key] = rate
+        
+        return latest_rates
 
     def rate_indexation_interactive(self):
         """Interactive rate indexation - apply percentage changes to existing rates"""
@@ -752,42 +1066,6 @@ class RateManager:
         # Create the indexed rates
         self._create_indexed_rates_batch(indexed_rates)
 
-    def _get_latest_rates_by_account_service(self, rates: List[Dict]) -> Dict[tuple, Dict]:
-        """Get the latest rate for each account/service combination with data validation"""
-        latest_rates = {}
-        
-        for rate in rates:
-            account_id = rate.get('account_id', '')
-            service_id = rate.get('service_id', '')
-            effective_date = rate.get('effective_date', '')
-            
-            # Skip rows with empty or invalid account_id or service_id
-            if not account_id or not service_id or account_id == '' or service_id == '':
-                continue
-            
-            # Validate that account_id and service_id are numeric
-            try:
-                int(account_id)
-                int(service_id)
-            except (ValueError, TypeError):
-                print(f"   ⚠️  Skipping invalid rate data: account_id='{account_id}', service_id='{service_id}'")
-                continue
-            
-            # Validate rate values
-            try:
-                float(rate.get('rate', 0))
-                float(rate.get('cogs_rate', 0))
-            except (ValueError, TypeError):
-                print(f"   ⚠️  Skipping rate with invalid values: account_id={account_id}, service_id={service_id}")
-                continue
-            
-            key = (account_id, service_id)
-            
-            if key not in latest_rates or effective_date > latest_rates[key]['effective_date']:
-                latest_rates[key] = rate
-        
-        return latest_rates
-
     def _rate_exists_for_date(self, account_id: int, service_id: int, target_date: str, existing_rates: List[Dict]) -> bool:
         """Check if a rate already exists for the target date"""
         for rate in existing_rates:
@@ -857,7 +1135,7 @@ class RateManager:
         print(f"   📈 Success rate: {success_rate:.1f}%")
 
     def show_rate_management_menu(self):
-        """Enhanced rate management menu with indexation"""
+        """Enhanced rate management menu with export options"""
         while True:
             print("\n" + "="*60)
             print("💰 RATE MANAGEMENT")
@@ -870,6 +1148,8 @@ class RateManager:
                     questionary.Choice("🔍 Validate CSV before import", "validate"),
                     questionary.Choice("📁 Import rates from CSV file", "import_csv"),
                     questionary.Choice("📈 Rate indexation (percentage adjustments)", "indexation"),
+                    questionary.Choice("📤 Export all services/accounts to CSV", "export_all"),
+                    questionary.Choice("📤 Export rates-only to CSV", "export_rates"),
                     questionary.Choice("🔍 Check rate revision status", "check_status"),
                     questionary.Choice("⬅️  Back to main menu", "back")
                 ]
@@ -886,6 +1166,12 @@ class RateManager:
                 self._pause_for_review()
             elif choice == "indexation":
                 self.rate_indexation_interactive()
+                self._pause_for_review()
+            elif choice == "export_all":
+                self.export_services_accounts_csv()
+                self._pause_for_review()
+            elif choice == "export_rates":
+                self.export_rates_only_csv()
                 self._pause_for_review()
             elif choice == "check_status":
                 self.check_rate_status_interactive()

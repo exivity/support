@@ -11,135 +11,37 @@ def test_environment_creation(api, env_name: str = "TEST_ENV"):
     """Test environment creation with different approaches"""
     print(f"🧪 Testing environment creation for '{env_name}'...")
     
-    # Test approaches focusing on v1 API
+    # Test approaches using the SAME validated methods as the main system
     approaches = [
         {
-            "name": "v1 API (recommended)",
-            "endpoint": "/v1/environments",
-            "method": "POST",
-            "payload": {
-                "data": {
-                    "type": "environment",
-                    "attributes": {
-                        "name": env_name,
-                        "description": "Test environment",
-                        "default_flag": False
-                    }
-                }
-            },
-            "headers": {
-                "Content-Type": "application/vnd.api+json",
-                "Accept": "application/vnd.api+json"
-            }
+            "name": "Standard API (main system method)",
+            "test_func": lambda name: api.create_environment(name)
         },
         {
-            "name": "v1 API with variable (two-step process)",
-            "endpoint": "/v1/environments",
-            "method": "POST",
-            "payload": {
-                "data": {
-                    "type": "environment",
-                    "attributes": {
-                        "name": env_name + "_with_var",
-                        "description": "Test environment with variable",
-                        "default_flag": False
-                    }
-                }
-            },
-            "headers": {
-                "Content-Type": "application/vnd.api+json",
-                "Accept": "application/vnd.api+json"
-            }
-        },
-        {
-            "name": "v2 atomic operations (legacy)",
-            "endpoint": "/v2/",
-            "method": "POST",
-            "payload": {
-                "atomic:operations": [
-                    {
-                        "op": "add",
-                        "data": {
-                            "type": "environment",
-                            "attributes": {
-                                "name": env_name + "_atomic",
-                                "description": "Test environment",
-                                "default_flag": False
-                            },
-                            "relationships": {},
-                            "lid": "test-lid-12345"
-                        }
-                    }
-                ]
-            },
-            "headers": {
-                "Content-Type": "application/vnd.api+json;ext=\"https://jsonapi.org/ext/atomic\"",
-                "Accept": "application/vnd.api+json"
-            }
+            "name": "With variables (main system method)",
+            "test_func": lambda name: api.create_environment_with_variables(name + "_with_var", {"test_var": "test_value"})
         }
     ]
     
     for i, approach in enumerate(approaches, 1):
         try:
             print(f"\n🔬 Test {i}: {approach['name']}")
-            print(f"   Endpoint: {approach['endpoint']}")
-            print(f"   Payload: {json.dumps(approach['payload'], indent=2)}")
             
-            resp = api._request(
-                approach['method'], 
-                approach['endpoint'], 
-                json=approach['payload'], 
-                headers=approach['headers']
-            )
+            # Use the same methods as the main system
+            env_id = approach['test_func'](env_name if i == 1 else env_name)
             
-            result = resp.json()
-            print(f"   ✅ Success! Response: {json.dumps(result, indent=2)}")
+            print(f"   ✅ Success! Environment ID: {env_id}")
             
             # Clean up - try to delete the test environment
-            env_id = None
-            if "atomic:results" in result:
-                # Find environment ID in atomic results
-                for atomic_result in result["atomic:results"]:
-                    if atomic_result.get("data", {}).get("type") == "environment":
-                        env_id = atomic_result["data"]["id"]
-                        break
-            elif "data" in result and "id" in result["data"]:
-                env_id = result["data"]["id"]
-            
-            # For the second test, also create a variable
-            if i == 2 and env_id:
-                try:
-                    variable_payload = {
-                        "data": {
-                            "type": "variable",
-                            "attributes": {
-                                "name": "test_var",
-                                "value": "test_value",
-                                "encrypted": False
-                            },
-                            "relationships": {
-                                "environment": {
-                                    "data": {
-                                        "type": "environment",
-                                        "id": env_id
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    var_resp = api._request("POST", "/v1/variables", 
-                                          json=variable_payload, 
-                                          headers=approach['headers'])
-                    print(f"   ✅ Variable created successfully!")
-                except Exception as var_e:
-                    print(f"   ⚠️  Variable creation failed: {var_e}")
-            
             if env_id:
                 try:
-                    api._request("DELETE", f"/v1/environments/{env_id}")
+                    api.delete_environment(env_id)
                     print(f"   🧹 Cleaned up test environment (ID: {env_id})")
-                except:
-                    print(f"   ⚠️  Could not clean up test environment (ID: {env_id})")
+                except Exception as cleanup_e:
+                    if "default environment" in str(cleanup_e).lower():
+                        print(f"   🛡️  Cannot delete test environment (ID: {env_id}) - it's the default environment")
+                    else:
+                        print(f"   ⚠️  Could not clean up test environment (ID: {env_id}): {cleanup_e}")
             
             return True
             
