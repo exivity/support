@@ -236,7 +236,7 @@ class WorkflowManager:
             return None
 
     def _parse_workflow_steps(self, steps_data: List[Dict]) -> List[Dict]:
-        """Parse workflow steps from API response"""
+        """Parse workflow steps from API response with proper data cleaning"""
         parsed_steps = []
         
         # Sort steps by their order/sequence
@@ -253,29 +253,182 @@ class WorkflowManager:
                 'attributes': {}
             }
             
-            # Extract step-specific attributes
+            # Extract step-specific attributes with proper data cleaning
             if step_type in ('extract', 'transform'):
                 if 'script' in options:
                     parsed_step['attributes']['script'] = options['script']
                 if 'from_date_offset' in options:
-                    parsed_step['attributes']['from_date_offset'] = options['from_date_offset']
+                    try:
+                        parsed_step['attributes']['from_date_offset'] = int(options['from_date_offset'])
+                    except (ValueError, TypeError):
+                        parsed_step['attributes']['from_date_offset'] = 0
                 if 'to_date_offset' in options:
-                    parsed_step['attributes']['to_date_offset'] = options['to_date_offset']
-                if 'arguments' in options:
+                    try:
+                        parsed_step['attributes']['to_date_offset'] = int(options['to_date_offset'])
+                    except (ValueError, TypeError):
+                        parsed_step['attributes']['to_date_offset'] = 0
+                if 'arguments' in options and options['arguments']:
                     parsed_step['attributes']['arguments'] = options['arguments']
-                # Note: environment_id will be reassigned during duplication
                 
+                # Copy environment_id if present (will be used for exact duplication)
+                if 'environment_id' in options:
+                    try:
+                        parsed_step['attributes']['environment_id'] = int(options['environment_id'])
+                    except (ValueError, TypeError):
+                        print(f"   ⚠️  Invalid environment_id in {step_type} step: {options['environment_id']}")
+                        # Don't include invalid environment_id
+                        
             elif step_type == 'prepare_report':
                 if 'report_id' in options:
-                    parsed_step['attributes']['report_id'] = options['report_id']
+                    try:
+                        parsed_step['attributes']['report_id'] = int(options['report_id'])
+                    except (ValueError, TypeError):
+                        print(f"   ⚠️  Invalid report_id in prepare_report step: {options['report_id']}")
+                        continue  # Skip this step if report_id is invalid
                 if 'from_date_offset' in options:
-                    parsed_step['attributes']['from_date_offset'] = options['from_date_offset']
+                    try:
+                        parsed_step['attributes']['from_date_offset'] = int(options['from_date_offset'])
+                    except (ValueError, TypeError):
+                        parsed_step['attributes']['from_date_offset'] = 0
                 if 'to_date_offset' in options:
-                    parsed_step['attributes']['to_date_offset'] = options['to_date_offset']
+                    try:
+                        parsed_step['attributes']['to_date_offset'] = int(options['to_date_offset'])
+                    except (ValueError, TypeError):
+                        parsed_step['attributes']['to_date_offset'] = 0
             
-            parsed_steps.append(parsed_step)
+            # Only add step if it has required attributes
+            if self._validate_parsed_step(parsed_step):
+                parsed_steps.append(parsed_step)
+            else:
+                print(f"   ⚠️  Skipping invalid {step_type} step during parsing")
         
         return parsed_steps
+
+    def _validate_parsed_step(self, step: Dict) -> bool:
+        """Validate that a parsed step has required attributes"""
+        step_type = step.get('type', '')
+        attributes = step.get('attributes', {})
+        
+        if step_type == 'extract':
+            return 'script' in attributes
+        elif step_type == 'transform':
+            return 'script' in attributes
+        elif step_type == 'prepare_report':
+            return 'report_id' in attributes
+        
+        return False
+
+    def _duplicate_workflow(self, source_workflow: Dict, new_name: str, new_description: str, workflow_details: Dict):
+        """Perform the actual workflow duplication - copy exactly as-is with validation"""
+        print(f"🔄 Duplicating workflow '{source_workflow['name']}' as '{new_name}'...")
+        
+        try:
+            steps = workflow_details.get('steps', [])
+            
+            if not steps:
+                # Create simple workflow without steps
+                workflow_id = self.api.create_workflow(new_name, new_description)
+                print(f"✅ Created workflow '{new_name}' (ID: {workflow_id}) - no steps to duplicate")
+                return
+            
+            print(f"📊 Duplicating workflow with {len(steps)} step(s) exactly as-is")
+            
+            # Validate and clean steps before creation
+            valid_steps = []
+            for i, step in enumerate(steps):
+                if self._validate_step_for_duplication(step, i + 1):
+                    valid_steps.append(step)
+                else:
+                    print(f"   ⚠️  Skipping invalid step {i + 1}")
+            
+            if not valid_steps:
+                print("❌ No valid steps found for duplication")
+                # Create basic workflow without steps
+                workflow_id = self.api.create_workflow(new_name, new_description)
+                print(f"✅ Created basic workflow '{new_name}' (ID: {workflow_id}) - no valid steps to duplicate")
+                return
+            
+            print(f"📋 Will duplicate {len(valid_steps)} valid step(s)")
+            
+            # Create workflow with all steps exactly as they are - no modifications
+            try:
+                workflow_id = self.api.create_workflow_with_steps(new_name, new_description, valid_steps)
+                print(f"✅ Workflow '{new_name}' (ID: {workflow_id}) duplicated with {len(valid_steps)} steps")
+            except Exception as e:
+                print(f"❌ Error creating workflow with steps: {e}")
+                print(f"DEBUG: First step data: {valid_steps[0] if valid_steps else 'No steps'}")
+                
+                # Fallback to basic workflow
+                print("🔄 Falling back to basic workflow creation...")
+                workflow_id = self.api.create_workflow(new_name, new_description)
+                print(f"✅ Created basic workflow '{new_name}' (ID: {workflow_id}) - steps may need to be added manually")
+                
+        except Exception as e:
+            print(f"❌ Error during workflow duplication: {e}")
+            raise
+
+    def _validate_step_for_duplication(self, step: Dict, step_number: int) -> bool:
+        """Validate step data before duplication"""
+        step_type = step.get('type', '')
+        attributes = step.get('attributes', {})
+        
+        if not step_type:
+            print(f"   ❌ Step {step_number}: Missing step type")
+            return False
+        
+        if step_type == 'extract':
+            if 'script' not in attributes:
+                print(f"   ❌ Step {step_number} (extract): Missing script name")
+                return False
+            
+            # Validate environment_id if present
+            if 'environment_id' in attributes:
+                try:
+                    int(attributes['environment_id'])
+                except (ValueError, TypeError):
+                    print(f"   ❌ Step {step_number} (extract): Invalid environment_id: {attributes['environment_id']}")
+                    return False
+                    
+        elif step_type == 'transform':
+            if 'script' not in attributes:
+                print(f"   ❌ Step {step_number} (transform): Missing script name")
+                return False
+                
+            # Validate environment_id if present
+            if 'environment_id' in attributes:
+                try:
+                    int(attributes['environment_id'])
+                except (ValueError, TypeError):
+                    print(f"   ❌ Step {step_number} (transform): Invalid environment_id: {attributes['environment_id']}")
+                    return False
+                    
+        elif step_type == 'prepare_report':
+            if 'report_id' not in attributes:
+                print(f"   ❌ Step {step_number} (prepare_report): Missing report_id")
+                return False
+                
+            # Validate report_id
+            try:
+                int(attributes['report_id'])
+            except (ValueError, TypeError):
+                print(f"   ❌ Step {step_number} (prepare_report): Invalid report_id: {attributes['report_id']}")
+                return False
+        else:
+            print(f"   ❌ Step {step_number}: Unknown step type: {step_type}")
+            return False
+        
+        # Validate numeric fields
+        numeric_fields = ['from_date_offset', 'to_date_offset']
+        for field in numeric_fields:
+            if field in attributes:
+                try:
+                    int(attributes[field])
+                except (ValueError, TypeError):
+                    print(f"   ❌ Step {step_number}: Invalid {field}: {attributes[field]}")
+                    return False
+        
+        print(f"   ✅ Step {step_number} ({step_type}): Valid")
+        return True
 
     def _interactive_step_builder(self) -> tuple[List[Dict], str, str]:
         """Build workflow steps interactively with selection lists"""
@@ -413,167 +566,6 @@ class WorkflowManager:
             return None
         
         return selected
-
-    def _duplicate_workflow(self, source_workflow: Dict, new_name: str, new_description: str, workflow_details: Dict):
-        """Perform the actual workflow duplication"""
-        print(f"🔄 Duplicating workflow '{source_workflow['name']}' as '{new_name}'...")
-        
-        try:
-            steps = workflow_details.get('steps', [])
-            
-            if not steps:
-                # Create simple workflow without steps
-                workflow_id = self.api.create_workflow(new_name, new_description)
-                print(f"✅ Created workflow '{new_name}' (ID: {workflow_id}) - no steps to duplicate")
-                return
-            
-            # Analyze steps to determine if this is an hourly workflow
-            hourly_steps = self._analyze_hourly_pattern(steps)
-            
-            if hourly_steps:
-                print(f"📊 Detected hourly workflow pattern: {len(hourly_steps)} unique step(s) × 24 environments")
-                self._duplicate_hourly_workflow(new_name, new_description, hourly_steps)
-            else:
-                print(f"📊 Detected standard workflow: {len(steps)} step(s)")
-                self._duplicate_standard_workflow(new_name, new_description, steps)
-                
-        except Exception as e:
-            print(f"❌ Error during workflow duplication: {e}")
-            raise
-
-    def _analyze_hourly_pattern(self, steps: List[Dict]) -> Optional[List[Dict]]:
-        """Analyze if workflow follows hourly pattern and extract unique steps"""
-        # Group steps by their core attributes (excluding environment-specific data)
-        step_groups = {}
-        
-        for step in steps:
-            # Create a signature for the step type and core attributes
-            step_type = step.get('type', '')
-            attrs = step.get('attributes', {})
-            
-            # Build signature based on step type
-            if step_type in ('extract', 'transform'):
-                signature = (
-                    step_type,
-                    attrs.get('script', ''),
-                    attrs.get('from_date_offset', 0),
-                    attrs.get('to_date_offset', 0),
-                    attrs.get('arguments', '')
-                )
-            elif step_type == 'prepare_report':
-                signature = (
-                    step_type,
-                    attrs.get('report_id', ''),
-                    attrs.get('from_date_offset', 0),
-                    attrs.get('to_date_offset', 0)
-                )
-            else:
-                signature = (step_type, str(attrs))
-            
-            if signature not in step_groups:
-                step_groups[signature] = []
-            step_groups[signature].append(step)
-        
-        # Check if we have exactly 24 instances of each unique step (hourly pattern)
-        unique_steps = []
-        is_hourly = True
-        
-        for signature, group in step_groups.items():
-            if len(group) == 24:
-                # Take the first instance as the template
-                unique_steps.append(group[0])
-            elif len(group) == 1:
-                # Single step - could be prepare_report or non-environment step
-                unique_steps.append(group[0])
-            else:
-                # Not a clean 24-hour pattern
-                is_hourly = False
-                break
-        
-        if is_hourly and len(step_groups) > 0:
-            print(f"📋 Identified {len(unique_steps)} unique step pattern(s)")
-            return unique_steps
-        else:
-            return None
-
-    def _duplicate_hourly_workflow(self, new_name: str, new_description: str, unique_steps: List[Dict]):
-        """Duplicate an hourly workflow (24 environments)"""
-        print("🕐 Duplicating as hourly workflow...")
-        
-        # Ensure hourly environments exist
-        env_map = self.api.ensure_hourly_environments()
-        
-        # Duplicate steps for all 24 hours
-        all_steps = self._duplicate_steps_hourly(unique_steps, env_map)
-        
-        # Create workflow with all steps
-        try:
-            workflow_id = self.api.create_workflow_with_steps(new_name, new_description, all_steps)
-            print(f"✅ Workflow '{new_name}' (ID: {workflow_id}) duplicated with {len(all_steps)} steps across 24 hourly environments")
-        except Exception as e:
-            print(f"❌ Error creating hourly workflow: {e}")
-            # Fallback to basic workflow
-            print("🔄 Falling back to basic workflow creation...")
-            workflow_id = self.api.create_workflow(new_name, new_description)
-            print(f"✅ Created basic workflow '{new_name}' (ID: {workflow_id}) - steps may need to be added manually")
-
-    def _duplicate_standard_workflow(self, new_name: str, new_description: str, steps: List[Dict]):
-        """Duplicate a standard workflow (as-is)"""
-        print("📝 Duplicating as standard workflow...")
-        
-        try:
-            workflow_id = self.api.create_workflow_with_steps(new_name, new_description, steps)
-            print(f"✅ Workflow '{new_name}' (ID: {workflow_id}) duplicated with {len(steps)} steps")
-        except Exception as e:
-            print(f"❌ Error creating standard workflow: {e}")
-            # Fallback to basic workflow
-            print("🔄 Falling back to basic workflow creation...")
-            workflow_id = self.api.create_workflow(new_name, new_description)
-            print(f"✅ Created basic workflow '{new_name}' (ID: {workflow_id}) - steps may need to be added manually")
-
-    def list_workflows_interactive(self):
-        """Interactive workflow listing with details"""
-        print("📋 Listing all workflows...")
-        
-        try:
-            workflows = self._get_existing_workflows()
-            
-            if not workflows:
-                print("❌ No workflows found")
-                return
-            
-            print(f"\n📊 Found {len(workflows)} workflow(s):")
-            print("-" * 80)
-            
-            for i, wf in enumerate(workflows, 1):
-                print(f"{i:3}. {wf['name']} (ID: {wf['id']})")
-                if wf.get('description'):
-                    print(f"     Description: {wf['description']}")
-                if wf.get('created_at'):
-                    print(f"     Created: {wf['created_at']}")
-                
-                # Get step count
-                try:
-                    details = self._get_workflow_details(wf['id'])
-                    if details:
-                        step_count = len(details.get('steps', []))
-                        print(f"     Steps: {step_count}")
-                        
-                        # Try to identify if it's hourly
-                        steps = details.get('steps', [])
-                        if steps:
-                            hourly_steps = self._analyze_hourly_pattern(steps)
-                            if hourly_steps:
-                                print(f"     Type: Hourly workflow ({len(hourly_steps)} unique × 24 environments)")
-                            else:
-                                print(f"     Type: Standard workflow")
-                except:
-                    print(f"     Steps: Unable to retrieve")
-                
-                print("-" * 80)
-                
-        except Exception as e:
-            print(f"❌ Error listing workflows: {e}")
 
     def _duplicate_steps_hourly(self, steps: List[Dict], env_map: Dict[str, str]) -> List[Dict]:
         """Duplicate steps for each hourly environment - original logic with validation"""

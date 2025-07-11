@@ -708,6 +708,432 @@ class RateManager:
         
         return latest_rates
 
+    def rate_indexation_interactive(self):
+        """Interactive rate indexation - apply percentage changes to existing rates"""
+        print("📈 Rate Indexation Tool")
+        print("Apply percentage increases/decreases to existing rates")
+        print("-" * 50)
+        
+        # Choose indexation scope
+        scope = questionary.select(
+            "Choose indexation scope:",
+            choices=[
+                questionary.Choice("🌐 All accounts", "global"),
+                questionary.Choice("🏢 Account-specific rates", "account"),
+                questionary.Choice("⬅️  Back to rate management", "back")
+            ]
+        ).ask()
+        
+        if scope == "back":
+            return
+        
+        # Get indexation parameters
+        percentage = questionary.text(
+            "Percentage change (e.g., 5 for +5%, -3 for -3%):",
+            validate=lambda x: self._validate_percentage(x)
+        ).ask()
+        
+        if not percentage:
+            print("❌ Percentage is required")
+            return
+        
+        percentage_value = float(percentage)
+        
+        # Get effective date for new rate revisions
+        effective_date = questionary.text(
+            "Effective date for indexed rates (YYYYMMDD or YYYY-MM-DD):",
+            validate=lambda x: self._validate_date_format(x)
+        ).ask()
+        
+        if not effective_date:
+            print("❌ Effective date is required")
+            return
+        
+        # Normalize date format
+        if len(effective_date) == 8 and effective_date.isdigit():
+            formatted_date = f"{effective_date[:4]}-{effective_date[4:6]}-{effective_date[6:8]}"
+            display_date = effective_date
+        else:
+            formatted_date = effective_date
+            display_date = effective_date.replace("-", "")
+        
+        # Account-specific logic
+        target_account_id = None
+        if scope == "account":
+            account_id = questionary.text("Account ID to index:").ask()
+            if not account_id:
+                print("❌ Account ID is required for account-specific indexation")
+                return
+            
+            try:
+                target_account_id = int(account_id)
+            except ValueError:
+                print("❌ Invalid account ID format")
+                return
+        
+        # Show confirmation
+        scope_text = f"Account {target_account_id}" if scope == "account" else "All accounts"
+        change_text = f"+{percentage_value}%" if percentage_value > 0 else f"{percentage_value}%"
+        
+        print(f"\n📋 Indexation Summary:")
+        print(f"   • Scope: {scope_text}")
+        print(f"   • Change: {change_text}")
+        print(f"   • New effective date: {display_date}")
+        
+        confirm = questionary.confirm(
+            "Proceed with rate indexation?",
+            default=False
+        ).ask()
+        
+        if not confirm:
+            print("Operation cancelled.")
+            return
+        
+        # Execute indexation
+        try:
+            if scope == "global":
+                self._perform_global_indexation(percentage_value, formatted_date, display_date)
+            else:
+                self._perform_account_indexation(target_account_id, percentage_value, formatted_date, display_date)
+        except Exception as e:
+            print(f"❌ Error during indexation: {e}")
+
+    def _validate_percentage(self, value: str) -> bool:
+        """Validate percentage input"""
+        try:
+            float_val = float(value)
+            if float_val == 0:
+                return "Percentage cannot be zero"
+            if abs(float_val) > 100:
+                return "Percentage seems too large (>100%). Please confirm this is correct."
+            return True
+        except ValueError:
+            return "Please enter a valid number (e.g., 5, -3, 2.5)"
+
+    def _validate_date_format(self, value: str) -> bool:
+        """Validate date format"""
+        if not value:
+            return "Date is required"
+        
+        # Check YYYYMMDD format
+        if len(value) == 8 and value.isdigit():
+            try:
+                year = int(value[:4])
+                month = int(value[4:6])
+                day = int(value[6:8])
+                if year < 2000 or year > 2100:
+                    return "Year should be between 2000-2100"
+                if month < 1 or month > 12:
+                    return "Month should be between 01-12"
+                if day < 1 or day > 31:
+                    return "Day should be between 01-31"
+                return True
+            except ValueError:
+                return "Invalid date format"
+        
+        # Check YYYY-MM-DD format
+        if len(value) == 10 and value.count('-') == 2:
+            try:
+                parts = value.split('-')
+                year = int(parts[0])
+                month = int(parts[1])
+                day = int(parts[2])
+                if year < 2000 or year > 2100:
+                    return "Year should be between 2000-2100"
+                if month < 1 or month > 12:
+                    return "Month should be between 01-12"
+                if day < 1 or day > 31:
+                    return "Day should be between 01-31"
+                return True
+            except (ValueError, IndexError):
+                return "Invalid date format"
+        
+        return "Please use YYYYMMDD or YYYY-MM-DD format"
+
+    def _perform_global_indexation(self, percentage: float, formatted_date: str, display_date: str):
+        """Perform rate indexation for all accounts"""
+        print(f"🌐 Starting indexation for all accounts ({percentage:+.2f}%)...")
+        
+        # Get all existing rates from dump data
+        print("📊 Loading existing rates...")
+        dump_data = self.api.fetch_dump_data()
+        existing_rates = dump_data.get('rate', [])
+        
+        if not existing_rates:
+            print("❌ No existing rates found")
+            return
+        
+        print(f"📋 Found {len(existing_rates)} existing rates")
+        
+        # Group rates by account/service to get latest rates
+        latest_rates = self._get_latest_rates_by_account_service(existing_rates)
+        
+        print(f"📋 Found {len(latest_rates)} unique account/service combinations")
+        
+        # Create indexed rates
+        indexed_rates = []
+        skipped_invalid = 0
+        skipped_existing = 0
+        
+        for (account_id, service_id), rate_info in latest_rates.items():
+            try:
+                # Convert to integers for consistency
+                account_id_int = int(account_id)
+                service_id_int = int(service_id)
+                
+                # Check if indexed rate already exists
+                if self._rate_exists_for_date(account_id_int, service_id_int, formatted_date, existing_rates):
+                    print(f"   ⏭️  Skipping Account {account_id_int}, Service {service_id_int} - rate already exists for {display_date}")
+                    skipped_existing += 1
+                    continue
+                
+                # Calculate new rates
+                current_rate = float(rate_info.get('rate', 0))
+                current_cogs = float(rate_info.get('cogs_rate', 0))
+                
+                if current_rate == 0 and current_cogs == 0:
+                    print(f"   ⚠️  Skipping Account {account_id_int}, Service {service_id_int} - zero rates")
+                    skipped_invalid += 1
+                    continue
+                
+                new_rate = current_rate * (1 + percentage / 100)
+                new_cogs = current_cogs * (1 + percentage / 100)
+                
+                indexed_rates.append({
+                    "account_id": account_id_int,
+                    "service_id": service_id_int,
+                    "rate": round(new_rate, 6),
+                    "cogs": round(new_cogs, 6),
+                    "effective_date": display_date,
+                    "original_rate": current_rate,
+                    "original_cogs": current_cogs
+                })
+                
+            except (ValueError, TypeError) as e:
+                print(f"   ⚠️  Skipping invalid data for Account {account_id}, Service {service_id}: {e}")
+                skipped_invalid += 1
+                continue
+        
+        if not indexed_rates:
+            print("❌ No rates to index")
+            print(f"   • {skipped_existing} rates already exist for target date")
+            print(f"   • {skipped_invalid} rates had invalid data")
+            return
+        
+        print(f"📋 Will create {len(indexed_rates)} indexed rates for all accounts")
+        print(f"   • {skipped_existing} rates already exist (will skip)")
+        print(f"   • {skipped_invalid} rates had invalid data (skipped)")
+        
+        # Show sample of changes
+        print("\n📊 Sample of rate changes:")
+        for i, rate in enumerate(indexed_rates[:5]):
+            print(f"   • Account {rate['account_id']}, Service {rate['service_id']}: "
+                  f"{rate['original_rate']:.6f} → {rate['rate']:.6f} "
+                  f"(COGS: {rate['original_cogs']:.6f} → {rate['cogs']:.6f})")
+        
+        if len(indexed_rates) > 5:
+            print(f"   ... and {len(indexed_rates) - 5} more")
+        
+        # Final confirmation
+        confirm = questionary.confirm(
+            f"\nCreate {len(indexed_rates)} indexed rate revisions across all accounts?",
+            default=True
+        ).ask()
+        
+        if not confirm:
+            print("Operation cancelled.")
+            return
+        
+        # Create the indexed rates
+        self._create_indexed_rates_batch(indexed_rates)
+
+    def _perform_account_indexation(self, account_id: int, percentage: float, formatted_date: str, display_date: str):
+        """Perform account-specific rate indexation with improved error handling"""
+        print(f"🏢 Starting indexation for Account {account_id} ({percentage:+.2f}%)...")
+        
+        # Get all existing rates from dump data
+        print("📊 Loading existing rates...")
+        dump_data = self.api.fetch_dump_data()
+        existing_rates = dump_data.get('rate', [])
+        
+        # Filter rates for the target account with validation
+        account_rates = []
+        for rate in existing_rates:
+            try:
+                rate_account_id = rate.get('account_id', '')
+                if rate_account_id and int(rate_account_id) == account_id:
+                    account_rates.append(rate)
+            except (ValueError, TypeError):
+                continue  # Skip invalid account_id values
+        
+        if not account_rates:
+            print(f"❌ No existing rates found for Account {account_id}")
+            return
+        
+        print(f"📋 Found {len(account_rates)} existing rates for Account {account_id}")
+        
+        # Group by service to get latest rates with validation
+        latest_rates = {}
+        for rate in account_rates:
+            try:
+                service_id = rate.get('service_id', '')
+                effective_date = rate.get('effective_date', '')
+                
+                # Validate service_id
+                if not service_id or service_id == '':
+                    continue
+                
+                service_id_int = int(service_id)
+                
+                # Validate rate values
+                rate_value = float(rate.get('rate', 0))
+                cogs_value = float(rate.get('cogs_rate', 0))
+                
+                key = service_id_int
+                if key not in latest_rates or effective_date > latest_rates[key]['effective_date']:
+                    latest_rates[key] = rate
+                    
+            except (ValueError, TypeError):
+                continue  # Skip invalid data
+        
+        print(f"📋 Found {len(latest_rates)} unique services for Account {account_id}")
+        
+        # Create indexed rates
+        indexed_rates = []
+        skipped_existing = 0
+        skipped_invalid = 0
+        
+        for service_id_int, rate_info in latest_rates.items():
+            try:
+                # Check if indexed rate already exists
+                if self._rate_exists_for_date(account_id, service_id_int, formatted_date, existing_rates):
+                    print(f"   ⏭️  Skipping Service {service_id_int} - rate already exists for {display_date}")
+                    skipped_existing += 1
+                    continue
+                
+                # Calculate new rates
+                current_rate = float(rate_info.get('rate', 0))
+                current_cogs = float(rate_info.get('cogs_rate', 0))
+                
+                if current_rate == 0 and current_cogs == 0:
+                    print(f"   ⚠️  Skipping Service {service_id_int} - zero rates")
+                    skipped_invalid += 1
+                    continue
+                
+                new_rate = current_rate * (1 + percentage / 100)
+                new_cogs = current_cogs * (1 + percentage / 100)
+                
+                indexed_rates.append({
+                    "account_id": account_id,
+                    "service_id": service_id_int,
+                    "rate": round(new_rate, 6),
+                    "cogs": round(new_cogs, 6),
+                    "effective_date": display_date,
+                    "original_rate": current_rate,
+                    "original_cogs": current_cogs
+                })
+                
+            except (ValueError, TypeError) as e:
+                print(f"   ⚠️  Skipping Service {service_id_int}: {e}")
+                skipped_invalid += 1
+                continue
+        
+        if not indexed_rates:
+            print("❌ No rates to index")
+            print(f"   • {skipped_existing} rates already exist for target date")
+            print(f"   • {skipped_invalid} rates had invalid data")
+            return
+        
+        print(f"📋 Will create {len(indexed_rates)} indexed rates for Account {account_id}")
+        
+        # Show all changes for account-specific indexation
+        print(f"\n📊 Rate changes for Account {account_id}:")
+        for rate in indexed_rates:
+            print(f"   • Service {rate['service_id']}: "
+                  f"{rate['original_rate']:.6f} → {rate['rate']:.6f} "
+                  f"(COGS: {rate['original_cogs']:.6f} → {rate['cogs']:.6f})")
+        
+        # Final confirmation
+        confirm = questionary.confirm(
+            f"\nCreate {len(indexed_rates)} indexed rate revisions for Account {account_id}?",
+            default=True
+        ).ask()
+        
+        if not confirm:
+            print("Operation cancelled.")
+            return
+        
+        # Create the indexed rates
+        self._create_indexed_rates_batch(indexed_rates)
+
+    def _rate_exists_for_date(self, account_id: int, service_id: int, target_date: str, existing_rates: List[Dict]) -> bool:
+        """Check if a rate already exists for the target date"""
+        for rate in existing_rates:
+            if (str(rate.get('account_id', '')) == str(account_id) and 
+                str(rate.get('service_id', '')) == str(service_id) and 
+                rate.get('effective_date', '') == target_date):
+                return True
+        return False
+
+    def _create_indexed_rates_batch(self, indexed_rates: List[Dict]):
+        """Create indexed rates using batch processing"""
+        print(f"🔄 Creating {len(indexed_rates)} indexed rate revisions...")
+        
+        created_count = 0
+        failed_count = 0
+        
+        # Process in batches of 50
+        batch_size = 50
+        for i in range(0, len(indexed_rates), batch_size):
+            batch = indexed_rates[i:i+batch_size]
+            
+            try:
+                print(f"   Creating batch {i//batch_size + 1} ({len(batch)} rates)...")
+                result = self.api.create_rate_revisions_batch(batch)
+                
+                # Count successful creations
+                atomic_results = result.get("atomic:results", [])
+                successful_in_batch = len([r for r in atomic_results if "data" in r])
+                created_count += successful_in_batch
+                
+                if successful_in_batch == len(batch):
+                    print(f"   ✅ Batch {i//batch_size + 1} completed successfully")
+                else:
+                    print(f"   ⚠️  Batch {i//batch_size + 1}: {successful_in_batch}/{len(batch)} created")
+                
+            except Exception as e:
+                print(f"   ❌ Batch {i//batch_size + 1} failed: {e}")
+                print("   🔄 Falling back to individual rate creation...")
+                
+                # Fall back to individual creation for this batch
+                for rate in batch:
+                    try:
+                        self.api.create_rate_revision(
+                            rate["account_id"], 
+                            rate["service_id"], 
+                            rate["rate"], 
+                            rate["cogs"], 
+                            rate["effective_date"]
+                        )
+                        created_count += 1
+                        print(f"   ✅ Created indexed rate for Account {rate['account_id']}, Service {rate['service_id']}")
+                    except Exception as e2:
+                        failed_count += 1
+                        print(f"   ❌ Failed to create rate for Account {rate['account_id']}, Service {rate['service_id']}: {e2}")
+        
+        # Clear dump cache since we added new rates
+        self.api.clear_dump_cache()
+        
+        # Summary
+        print(f"\n📊 Indexation Summary:")
+        print(f"   ✅ Successfully created: {created_count} rate revisions")
+        if failed_count > 0:
+            print(f"   ❌ Failed: {failed_count} rate revisions")
+        
+        total_attempted = len(indexed_rates)
+        success_rate = (created_count / total_attempted * 100) if total_attempted > 0 else 0
+        print(f"   📈 Success rate: {success_rate:.1f}%")
+
     def show_rate_management_menu(self):
         """Enhanced rate management menu with export options"""
         while True:
