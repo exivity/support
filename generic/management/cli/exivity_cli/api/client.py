@@ -129,8 +129,6 @@ class ExivityAPI:
         else:
             formatted_date = effective_date
         
-        print(f"DEBUG: Creating rate for account_id={account_id}, service_id={service_id}, rate={rate}, cogs={cogs}, date={formatted_date}")
-        
         last_error = None  # Track the last error for final exception
         
         # Approach 1: v2 atomic operations (original working version)
@@ -168,13 +166,10 @@ class ExivityAPI:
                 "Accept": "application/vnd.api+json"
             }
             
-            print("DEBUG: Trying v2 atomic operations...")
             self._request("POST", "/v2/", json=payload, headers=headers)
-            print("DEBUG: v2 atomic rate creation succeeded!")
-            return
+            return  # Success - no debug output needed
             
         except Exception as e:
-            print(f"DEBUG: v2 atomic rate creation failed: {e}")
             last_error = e
         
         # Approach 2: v1 API standard creation
@@ -207,13 +202,10 @@ class ExivityAPI:
                 "Accept": "application/vnd.api+json"
             }
             
-            print("DEBUG: Trying v1 rate creation...")
             self._request("POST", "/v1/rates", json=payload_v1, headers=headers_v1)
-            print("DEBUG: v1 rate creation succeeded!")
             return
             
         except Exception as e:
-            print(f"DEBUG: v1 rate creation failed: {e}")
             last_error = e
         
         # Approach 3: Simplified v2 rate creation
@@ -237,17 +229,16 @@ class ExivityAPI:
                 "Accept": "application/vnd.api+json"
             }
             
-            print("DEBUG: Trying simplified v2 rate creation...")
             self._request("POST", "/v2/rates", json=payload_simple, headers=headers_simple)
-            print("DEBUG: Simplified v2 rate creation succeeded!")
             return
             
         except Exception as e:
-            print(f"DEBUG: Simplified v2 rate creation failed: {e}")
             last_error = e
         
-        # If all approaches fail, raise the last exception
-        raise Exception(f"All rate creation approaches failed. Last error: {last_error}")
+        # If all approaches fail, show debug info and raise the last exception
+        print(f"DEBUG: All rate creation approaches failed for account {account_id}, service {service_id}")
+        print(f"DEBUG: v2 atomic failed: {last_error}")
+        raise Exception(f"All rate creation approaches failed for account {account_id}, service {service_id}. Last error: {last_error}")
 
     def create_rate_revisions_batch(self, rate_data: List[Dict]) -> Dict:
         """Create multiple rate revisions using atomic operations - exact copy from working version"""
@@ -282,6 +273,99 @@ class ExivityAPI:
                     "relationships": {
                         "service": {"data": {"id": str(rate["service_id"]), "type": "service"}},
                         "account": {"data": {"type": "account", "id": str(rate["account_id"])}},
+                        "ratetiers": {"data": []}
+                    },
+                    "lid": str(uuid.uuid4())
+                }
+            }
+            operations.append(operation)
+        
+        payload = {"atomic:operations": operations}
+        headers = {
+            "Content-Type": "application/vnd.api+json;ext=\"https://jsonapi.org/ext/atomic\"",
+            "Accept": "application/vnd.api+json"
+        }
+        
+        resp = self._request("POST", "/v2/", json=payload, headers=headers)
+        return resp.json()
+
+    def create_list_price_revision(self, service_id: int, rate: float, cogs: float, effective_date: str):
+        """Create single list price revision (default rate with no account)"""
+        # Convert date format from YYYYMMDD to YYYY-MM-DD for API
+        if len(effective_date) == 8 and effective_date.isdigit():
+            formatted_date = f"{effective_date[:4]}-{effective_date[4:6]}-{effective_date[6:8]}"
+        else:
+            formatted_date = effective_date
+        
+        # Use v2 atomic operations for list price creation
+        operation = {
+            "op": "add",
+            "data": {
+                "type": "rate",
+                "attributes": {
+                    "rate": rate,
+                    "rate_col": None,
+                    "min_commit": 0,  # List prices typically have min_commit = 0
+                    "effective_date": formatted_date,
+                    "end_date": None,
+                    "fixed": None,
+                    "fixed_col": None,
+                    "cogs_rate": cogs,
+                    "cogs_rate_col": None,
+                    "cogs_fixed": None,
+                    "cogs_fixed_col": None,
+                    "tier_aggregation_level": None
+                },
+                "relationships": {
+                    "service": {"data": {"id": str(service_id), "type": "service"}},
+                    "account": {"data": None},  # No account = list price
+                    "ratetiers": {"data": []}
+                },
+                "lid": str(uuid.uuid4())
+            }
+        }
+        
+        payload = {"atomic:operations": [operation]}
+        headers = {
+            "Content-Type": "application/vnd.api+json;ext=\"https://jsonapi.org/ext/atomic\"",
+            "Accept": "application/vnd.api+json"
+        }
+        
+        self._request("POST", "/v2/", json=payload, headers=headers)
+
+    def create_list_price_revisions_batch(self, rate_data: List[Dict]) -> Dict:
+        """Create multiple list price revisions using atomic operations"""
+        operations = []
+        
+        for rate in rate_data:
+            # Convert date format from YYYYMMDD to YYYY-MM-DD for API
+            effective_date = rate["effective_date"]
+            if len(effective_date) == 8 and effective_date.isdigit():
+                formatted_date = f"{effective_date[:4]}-{effective_date[4:6]}-{effective_date[6:8]}"
+            else:
+                formatted_date = effective_date
+            
+            operation = {
+                "op": "add",
+                "data": {
+                    "type": "rate",
+                    "attributes": {
+                        "rate": float(rate["rate"]),
+                        "rate_col": None,
+                        "min_commit": 0,  # List prices typically have min_commit = 0
+                        "effective_date": formatted_date,
+                        "end_date": None,
+                        "fixed": None,
+                        "fixed_col": None,
+                        "cogs_rate": float(rate["cogs"]),
+                        "cogs_rate_col": None,
+                        "cogs_fixed": None,
+                        "cogs_fixed_col": None,
+                        "tier_aggregation_level": None
+                    },
+                    "relationships": {
+                        "service": {"data": {"id": str(rate["service_id"]), "type": "service"}},
+                        "account": {"data": None},  # No account = list price
                         "ratetiers": {"data": []}
                     },
                     "lid": str(uuid.uuid4())
@@ -764,11 +848,11 @@ class ExivityAPI:
 
     # ------------------------- dump data for insights ------------------------- #
     def fetch_dump_data(self) -> Dict[str, List[Dict]]:
-        """Fetch comprehensive dump data including accounts, services, and rates"""
+        """Fetch comprehensive dump data including accounts, services, rates, and rate tiers"""
         try:
-            # Use v1/dump/data with correct parameters and content type
+            # Include ratetier model to detect services with rate tiers
             params = {
-                "models": "account,adjustment,adjustables,metadata,rate,reportdefinition,service,servicecategory",
+                "models": "account,adjustment,adjustables,metadata,rate,ratetier,reportdefinition,service,servicecategory",
                 "progress": "0"
             }
             headers = {
@@ -781,13 +865,12 @@ class ExivityAPI:
             
         except Exception as e:
             print(f"❌ Failed to fetch dump data: {e}")
-            print(f"DEBUG: Trying alternative dump endpoint formats...")
             
             # Try alternative formats - all using v1/dump/data
             alternatives = [
                 {
                     "endpoint": "/v1/dump/data",
-                    "params": {"models": "account,rate,service", "progress": "0"},
+                    "params": {"models": "account,rate,ratetier,service", "progress": "0"},
                     "headers": {"Accept": "text/csv"}
                 },
                 {
@@ -799,26 +882,16 @@ class ExivityAPI:
                     "endpoint": "/v1/dump/data",
                     "params": {"models": "account", "progress": "0"},
                     "headers": {"Accept": "text/csv"}
-                },
-                # Fallback to v2 if v1 doesn't work
-                {
-                    "endpoint": "/v2/dump",
-                    "params": {"data": "account,service,rate", "progress": "0"},
-                    "headers": {"Accept": "text/csv"}
                 }
             ]
             
             for i, alt in enumerate(alternatives, 1):
                 try:
-                    print(f"DEBUG: Trying alternative {i}: {alt['endpoint']} with params: {alt['params']}")
                     resp = self._request("GET", alt['endpoint'], params=alt['params'], headers=alt['headers'])
-                    print(f"DEBUG: Alternative {i} succeeded!")
                     return self._parse_dump_response(resp.text)
                 except Exception as e2:
-                    print(f"DEBUG: Alternative {i} failed: {e2}")
                     continue
             
-            print("DEBUG: All dump formats failed, returning empty data")
             return {}
 
     def _parse_dump_response(self, dump_text: str) -> Dict[str, List[Dict]]:
@@ -827,10 +900,7 @@ class ExivityAPI:
         current_model = None
         current_headers = None
         
-        print(f"DEBUG: Parsing dump response, {len(dump_text)} characters")
-        
         lines = dump_text.strip().split('\n')
-        print(f"DEBUG: Found {len(lines)} lines in dump")
         
         for line_num, line in enumerate(lines):
             line = line.strip()
@@ -842,7 +912,6 @@ class ExivityAPI:
                 current_model = line.replace('###model:', '').replace('###', '').strip()
                 models[current_model] = []
                 current_headers = None
-                print(f"DEBUG: Found model: {current_model}")
                 continue
             
             # Skip if no current model
@@ -853,17 +922,12 @@ class ExivityAPI:
             if current_headers is None:
                 # First line after model header is the headers
                 current_headers = [h.strip() for h in line.split(',')]
-                print(f"DEBUG: Headers for {current_model}: {current_headers}")
             else:
                 # Data rows - handle CSV parsing with potential commas in quoted strings
                 values = self._parse_csv_line(line)
                 if len(values) == len(current_headers):
                     row_dict = dict(zip(current_headers, values))
                     models[current_model].append(row_dict)
-        
-        print(f"DEBUG: Parsed models: {list(models.keys())}")
-        for model, data in models.items():
-            print(f"DEBUG: Model {model} has {len(data)} records")
         
         return models
 

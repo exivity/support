@@ -104,8 +104,6 @@ class RateManager:
                 with open(csv_path, 'r', newline='', encoding=encoding) as f:
                     # Read first line to check headers
                     first_line = f.readline().strip()
-                    print(f"DEBUG: First line with {encoding} encoding: '{first_line}'")
-                    print(f"DEBUG: First line bytes: {first_line.encode('utf-8')}")
                     
                     # Reset file pointer
                     f.seek(0)
@@ -113,13 +111,9 @@ class RateManager:
                     reader = csv.DictReader(f)
                     fieldnames = reader.fieldnames
                     
-                    print(f"DEBUG: Detected fieldnames: {fieldnames}")
-                    print(f"DEBUG: Fieldnames as list: {list(fieldnames) if fieldnames else 'None'}")
-                    
                     # Clean fieldnames (remove any hidden characters)
                     if fieldnames:
                         cleaned_fieldnames = [field.strip().replace('\ufeff', '') for field in fieldnames]
-                        print(f"DEBUG: Cleaned fieldnames: {cleaned_fieldnames}")
                         
                         # Check if we have the required columns after cleaning
                         required_cols = {"account_id", "service_id", "rate", "cogs", "revision_start_date"}
@@ -129,14 +123,11 @@ class RateManager:
                             print(f"✅ Successfully parsed CSV with {encoding} encoding")
                             break
                         else:
-                            print(f"Missing columns with {encoding}: {missing}")
                             continue
                     else:
-                        print(f"No fieldnames detected with {encoding}")
                         continue
                         
             except UnicodeDecodeError:
-                print(f"Failed to decode with {encoding}, trying next encoding...")
                 continue
             except Exception as e:
                 print(f"Error with {encoding}: {e}")
@@ -174,16 +165,15 @@ class RateManager:
                 return
 
             print(f"Processing CSV file: {csv_path}")
-            print(f"DEBUG: Header row (row 1) contains: {reader.fieldnames}")
             
             # Collect all rate data and check for existing revisions using dump data
             new_rates = []
             skipped_count = 0
             processed_rows = 0
+            error_rows = 0
             
             for row_num, row in enumerate(reader, start=2):  # Start at 2 since row 1 is headers
                 processed_rows += 1
-                print(f"DEBUG: Processing row {row_num} (data row {processed_rows}): {row}")
                 
                 try:
                     # Clean the row data (remove any hidden characters)
@@ -195,8 +185,6 @@ class RateManager:
                     cogs = float(cleaned_row["cogs"])
                     eff_date = cleaned_row["revision_start_date"]
                     
-                    print(f"DEBUG: Parsed data - Account: {acc}, Service: {svc}, Rate: {rate}, COGS: {cogs}, Date: {eff_date}")
-                    
                     # Convert date format for lookup
                     if len(eff_date) == 8 and eff_date.isdigit():
                         formatted_date = f"{eff_date[:4]}-{eff_date[4:6]}-{eff_date[6:8]}"
@@ -205,7 +193,6 @@ class RateManager:
                     
                     # Check if rate revision already exists using fast lookup
                     if (str(acc), str(svc), formatted_date) in existing_rates_lookup:
-                        print(f"Row {row_num}: Rate revision already exists for account {acc}, service {svc} on {eff_date} – skipping.")
                         skipped_count += 1
                         continue
                     
@@ -220,28 +207,32 @@ class RateManager:
                     })
                     
                 except ValueError as e:
-                    print(f"Row {row_num}: Invalid data format - {e}")
-                    print(f"Row {row_num}: Data: {row}")
+                    error_rows += 1
                     continue
                 except Exception as e:
-                    print(f"Row {row_num}: Error processing row - {e}")
-                    print(f"Row {row_num}: Data: {row}")
+                    error_rows += 1
                     continue
             
-            print(f"DEBUG: Total data rows processed: {processed_rows}")
-            print(f"DEBUG: New rates to create: {len(new_rates)}")
-            print(f"DEBUG: Skipped existing rates: {skipped_count}")
+            print(f"📋 Summary:")
+            print(f"   • Total data rows processed: {processed_rows}")
+            print(f"   • New rates to create: {len(new_rates)}")
+            print(f"   • Skipped existing rates: {skipped_count}")
+            if error_rows > 0:
+                print(f"   • Rows with errors: {error_rows}")
             
             # Create rates in batches using atomic operations
             processed_count = 0
             if new_rates:
                 # Process in batches of 50 to avoid too large requests
                 batch_size = 50
+                total_batches = (len(new_rates) + batch_size - 1) // batch_size
+                
                 for i in range(0, len(new_rates), batch_size):
                     batch = new_rates[i:i+batch_size]
+                    batch_num = i // batch_size + 1
                     
                     try:
-                        print(f"Creating batch of {len(batch)} rate revisions...")
+                        print(f"Creating batch {batch_num}/{total_batches} ({len(batch)} rate revisions)...")
                         result = self.api.create_rate_revisions_batch(batch)
                         
                         # Count successful creations
@@ -249,13 +240,14 @@ class RateManager:
                         successful_in_batch = len([r for r in atomic_results if "data" in r])
                         processed_count += successful_in_batch
                         
-                        for rate in batch:
-                            print(f"Row {rate['row_num']}: Created rate revision for account {rate['account_id']}, service {rate['service_id']} ({rate['effective_date']})")
+                        if successful_in_batch == len(batch):
+                            print(f"✅ Batch {batch_num} completed successfully")
+                        else:
+                            print(f"⚠️  Batch {batch_num}: {successful_in_batch}/{len(batch)} created")
                         
                     except Exception as e:
-                        print(f"Error creating batch: {e}")
+                        print(f"❌ Batch {batch_num} failed: {e}")
                         # Fall back to individual creation for this batch
-                        print("Falling back to individual rate creation...")
                         for rate in batch:
                             try:
                                 self.api.create_rate_revision(
@@ -265,19 +257,18 @@ class RateManager:
                                     rate["cogs"], 
                                     rate["effective_date"]
                                 )
-                                print(f"Row {rate['row_num']}: Created rate revision for account {rate['account_id']}, service {rate['service_id']} ({rate['effective_date']})")
                                 processed_count += 1
                             except Exception as e2:
-                                print(f"Row {rate['row_num']}: Error creating individual rate - {e2}")
+                                print(f"❌ Row {rate['row_num']}: Error creating individual rate - {e2}")
             
             # Clear the dump cache after processing since we may have added new rates
             self.api.clear_dump_cache()
             
-            print(f"✅ Finished processing CSV:")
-            print(f"   - Total data rows in file: {processed_rows}")
-            print(f"   - Successfully processed: {processed_count} rows")
-            print(f"   - Skipped (already exist): {skipped_count} rows")
-            print(f"   - Errors: {processed_rows - processed_count - skipped_count} rows")
+            print(f"\n✅ Finished processing CSV:")
+            print(f"   • Total data rows in file: {processed_rows}")
+            print(f"   • Successfully processed: {processed_count} rows")
+            print(f"   • Skipped (already exist): {skipped_count} rows")
+            print(f"   • Errors: {processed_rows - processed_count - skipped_count} rows")
 
     def debug_api_connectivity(self):
         """Debug API connectivity and available endpoints"""
@@ -404,8 +395,9 @@ class RateManager:
         scope = questionary.select(
             "Choose indexation scope:",
             choices=[
-                questionary.Choice("🌐 All accounts", "global"),
-                questionary.Choice("🏢 Account-specific rates", "account"),
+                questionary.Choice("🌐 All account-specific rates", "global"),
+                questionary.Choice("🏢 Account-specific rates (single account)", "account"),
+                questionary.Choice("📝 List prices (default rates for all services)", "list_prices"),
                 questionary.Choice("⬅️  Back to rate management", "back")
             ]
         ).ask()
@@ -458,7 +450,13 @@ class RateManager:
                 return
         
         # Show confirmation
-        scope_text = f"Account {target_account_id}" if scope == "account" else "All accounts"
+        if scope == "list_prices":
+            scope_text = "List prices (default rates)"
+        elif scope == "account":
+            scope_text = f"Account {target_account_id}"
+        else:
+            scope_text = "All account-specific rates"
+            
         change_text = f"+{percentage_value}%" if percentage_value > 0 else f"{percentage_value}%"
         
         print(f"\n📋 Indexation Summary:")
@@ -479,8 +477,10 @@ class RateManager:
         try:
             if scope == "global":
                 self._perform_global_indexation(percentage_value, formatted_date, display_date)
-            else:
+            elif scope == "account":
                 self._perform_account_indexation(target_account_id, percentage_value, formatted_date, display_date)
+            elif scope == "list_prices":
+                self._perform_list_price_indexation(percentage_value, formatted_date, display_date)
         except Exception as e:
             print(f"❌ Error during indexation: {e}")
 
@@ -551,6 +551,11 @@ class RateManager:
         
         print(f"📋 Found {len(existing_rates)} existing rates")
         
+        # Get services with rate tiers to exclude them
+        services_with_tiers = self._get_services_with_rate_tiers(dump_data)
+        if services_with_tiers:
+            print(f"⚠️  Found {len(services_with_tiers)} service(s) with rate tiers - these will be skipped")
+        
         # Group rates by account/service to get latest rates
         latest_rates = self._get_latest_rates_by_account_service(existing_rates)
         
@@ -560,6 +565,7 @@ class RateManager:
         indexed_rates = []
         skipped_invalid = 0
         skipped_existing = 0
+        skipped_tiers = 0
         
         for (account_id, service_id), rate_info in latest_rates.items():
             try:
@@ -567,9 +573,13 @@ class RateManager:
                 account_id_int = int(account_id)
                 service_id_int = int(service_id)
                 
+                # Skip services with rate tiers
+                if str(service_id_int) in services_with_tiers:
+                    skipped_tiers += 1
+                    continue
+                
                 # Check if indexed rate already exists
                 if self._rate_exists_for_date(account_id_int, service_id_int, formatted_date, existing_rates):
-                    print(f"   ⏭️  Skipping Account {account_id_int}, Service {service_id_int} - rate already exists for {display_date}")
                     skipped_existing += 1
                     continue
                 
@@ -578,7 +588,6 @@ class RateManager:
                 current_cogs = float(rate_info.get('cogs_rate', 0))
                 
                 if current_rate == 0 and current_cogs == 0:
-                    print(f"   ⚠️  Skipping Account {account_id_int}, Service {service_id_int} - zero rates")
                     skipped_invalid += 1
                     continue
                 
@@ -596,19 +605,26 @@ class RateManager:
                 })
                 
             except (ValueError, TypeError) as e:
-                print(f"   ⚠️  Skipping invalid data for Account {account_id}, Service {service_id}: {e}")
                 skipped_invalid += 1
                 continue
         
         if not indexed_rates:
             print("❌ No rates to index")
-            print(f"   • {skipped_existing} rates already exist for target date")
-            print(f"   • {skipped_invalid} rates had invalid data")
+            if skipped_existing > 0:
+                print(f"   • {skipped_existing} rates already exist for target date")
+            if skipped_invalid > 0:
+                print(f"   • {skipped_invalid} rates had invalid data")
+            if skipped_tiers > 0:
+                print(f"   • {skipped_tiers} services with rate tiers (not supported)")
             return
         
         print(f"📋 Will create {len(indexed_rates)} indexed rates for all accounts")
-        print(f"   • {skipped_existing} rates already exist (will skip)")
-        print(f"   • {skipped_invalid} rates had invalid data (skipped)")
+        if skipped_existing > 0:
+            print(f"   • {skipped_existing} rates already exist (will skip)")
+        if skipped_invalid > 0:
+            print(f"   • {skipped_invalid} rates had invalid data (skipped)")
+        if skipped_tiers > 0:
+            print(f"   • {skipped_tiers} services with rate tiers (skipped - not supported)")
         
         # Show sample of changes
         print("\n📊 Sample of rate changes:")
@@ -641,6 +657,11 @@ class RateManager:
         print("📊 Loading existing rates...")
         dump_data = self.api.fetch_dump_data()
         existing_rates = dump_data.get('rate', [])
+        
+        # Get services with rate tiers to exclude them
+        services_with_tiers = self._get_services_with_rate_tiers(dump_data)
+        if services_with_tiers:
+            print(f"⚠️  Found {len(services_with_tiers)} service(s) with rate tiers - these will be skipped")
         
         # Filter rates for the target account with validation
         account_rates = []
@@ -688,12 +709,17 @@ class RateManager:
         indexed_rates = []
         skipped_existing = 0
         skipped_invalid = 0
+        skipped_tiers = 0
         
         for service_id_int, rate_info in latest_rates.items():
             try:
+                # Skip services with rate tiers
+                if str(service_id_int) in services_with_tiers:
+                    skipped_tiers += 1
+                    continue
+                
                 # Check if indexed rate already exists
                 if self._rate_exists_for_date(account_id, service_id_int, formatted_date, existing_rates):
-                    print(f"   ⏭️  Skipping Service {service_id_int} - rate already exists for {display_date}")
                     skipped_existing += 1
                     continue
                 
@@ -702,7 +728,6 @@ class RateManager:
                 current_cogs = float(rate_info.get('cogs_rate', 0))
                 
                 if current_rate == 0 and current_cogs == 0:
-                    print(f"   ⚠️  Skipping Service {service_id_int} - zero rates")
                     skipped_invalid += 1
                     continue
                 
@@ -720,17 +745,22 @@ class RateManager:
                 })
                 
             except (ValueError, TypeError) as e:
-                print(f"   ⚠️  Skipping Service {service_id_int}: {e}")
                 skipped_invalid += 1
                 continue
         
         if not indexed_rates:
             print("❌ No rates to index")
-            print(f"   • {skipped_existing} rates already exist for target date")
-            print(f"   • {skipped_invalid} rates had invalid data")
+            if skipped_existing > 0:
+                print(f"   • {skipped_existing} rates already exist for target date")
+            if skipped_invalid > 0:
+                print(f"   • {skipped_invalid} rates had invalid data")
+            if skipped_tiers > 0:
+                print(f"   • {skipped_tiers} services with rate tiers (not supported)")
             return
         
         print(f"📋 Will create {len(indexed_rates)} indexed rates for Account {account_id}")
+        if skipped_tiers > 0:
+            print(f"   • {skipped_tiers} services with rate tiers skipped (not supported)")
         
         # Show all changes for account-specific indexation
         print(f"\n📊 Rate changes for Account {account_id}:")
@@ -752,6 +782,33 @@ class RateManager:
         # Create the indexed rates
         self._create_indexed_rates_batch(indexed_rates)
 
+    def _get_services_with_rate_tiers(self, dump_data: Dict) -> set:
+        """Get set of service IDs that have rate tiers configured"""
+        services_with_tiers = set()
+        
+        # Look for rate tier data in dump
+        # Rate tiers might be in 'ratetier' model or referenced in rate data
+        ratetiers = dump_data.get('ratetier', [])
+        
+        for tier in ratetiers:
+            service_id = tier.get('service_id', '')
+            if service_id:
+                services_with_tiers.add(str(service_id))
+        
+        # Also check rates that have tier_aggregation_level set
+        rates = dump_data.get('rate', [])
+        for rate in rates:
+            tier_level = rate.get('tier_aggregation_level', '')
+            if tier_level and tier_level != '' and tier_level is not None:
+                service_id = rate.get('service_id', '')
+                if service_id:
+                    services_with_tiers.add(str(service_id))
+        
+        if services_with_tiers:
+            print(f"📋 Detected services with rate tiers: {sorted(services_with_tiers)}")
+        
+        return services_with_tiers
+
     def _get_latest_rates_by_account_service(self, rates: List[Dict]) -> Dict[tuple, Dict]:
         """Get the latest rate for each account/service combination with data validation"""
         latest_rates = {}
@@ -770,7 +827,6 @@ class RateManager:
                 int(account_id)
                 int(service_id)
             except (ValueError, TypeError):
-                print(f"   ⚠️  Skipping invalid rate data: account_id='{account_id}', service_id='{service_id}'")
                 continue
             
             # Validate rate values
@@ -778,7 +834,6 @@ class RateManager:
                 float(rate.get('rate', 0))
                 float(rate.get('cogs_rate', 0))
             except (ValueError, TypeError):
-                print(f"   ⚠️  Skipping rate with invalid values: account_id={account_id}, service_id={service_id}")
                 continue
             
             key = (account_id, service_id)
@@ -806,11 +861,14 @@ class RateManager:
         
         # Process in batches of 50
         batch_size = 50
+        total_batches = (len(indexed_rates) + batch_size - 1) // batch_size
+        
         for i in range(0, len(indexed_rates), batch_size):
             batch = indexed_rates[i:i+batch_size]
+            batch_num = i // batch_size + 1
             
             try:
-                print(f"   Creating batch {i//batch_size + 1} ({len(batch)} rates)...")
+                print(f"   Creating batch {batch_num}/{total_batches} ({len(batch)} rates)...")
                 result = self.api.create_rate_revisions_batch(batch)
                 
                 # Count successful creations
@@ -819,12 +877,12 @@ class RateManager:
                 created_count += successful_in_batch
                 
                 if successful_in_batch == len(batch):
-                    print(f"   ✅ Batch {i//batch_size + 1} completed successfully")
+                    print(f"   ✅ Batch {batch_num} completed successfully")
                 else:
-                    print(f"   ⚠️  Batch {i//batch_size + 1}: {successful_in_batch}/{len(batch)} created")
+                    print(f"   ⚠️  Batch {batch_num}: {successful_in_batch}/{len(batch)} created")
                 
             except Exception as e:
-                print(f"   ❌ Batch {i//batch_size + 1} failed: {e}")
+                print(f"   ❌ Batch {batch_num} failed: {e}")
                 print("   🔄 Falling back to individual rate creation...")
                 
                 # Fall back to individual creation for this batch
@@ -838,10 +896,8 @@ class RateManager:
                             rate["effective_date"]
                         )
                         created_count += 1
-                        print(f"   ✅ Created indexed rate for Account {rate['account_id']}, Service {rate['service_id']}")
                     except Exception as e2:
                         failed_count += 1
-                        print(f"   ❌ Failed to create rate for Account {rate['account_id']}, Service {rate['service_id']}: {e2}")
         
         # Clear dump cache since we added new rates
         self.api.clear_dump_cache()
@@ -851,6 +907,217 @@ class RateManager:
         print(f"   ✅ Successfully created: {created_count} rate revisions")
         if failed_count > 0:
             print(f"   ❌ Failed: {failed_count} rate revisions")
+        
+        total_attempted = len(indexed_rates)
+        success_rate = (created_count / total_attempted * 100) if total_attempted > 0 else 0
+        print(f"   📈 Success rate: {success_rate:.1f}%")
+
+    def _perform_list_price_indexation(self, percentage: float, formatted_date: str, display_date: str):
+        """Perform list price indexation for services with manual rates"""
+        print(f"📝 Starting list price indexation ({percentage:+.2f}%)...")
+        
+        # Get all existing rates from dump data
+        print("📊 Loading existing rates...")
+        dump_data = self.api.fetch_dump_data()
+        existing_rates = dump_data.get('rate', [])
+        
+        if not existing_rates:
+            print("❌ No existing rates found")
+            return
+        
+        print(f"📋 Found {len(existing_rates)} existing rates")
+        
+        # Get services with rate tiers to exclude them
+        services_with_tiers = self._get_services_with_rate_tiers(dump_data)
+        if services_with_tiers:
+            print(f"⚠️  Found {len(services_with_tiers)} service(s) with rate tiers - these will be skipped")
+        
+        # Find list prices (rates with account_id = null/empty)
+        list_price_rates = []
+        for rate in existing_rates:
+            account_id = rate.get('account_id', '')
+            # List prices have no account_id (null or empty)
+            if not account_id or account_id == '' or account_id == 'null':
+                list_price_rates.append(rate)
+        
+        if not list_price_rates:
+            print("❌ No list prices found")
+            print("💡 List prices are default rates that apply to all accounts when no account-specific rate exists")
+            return
+        
+        print(f"📋 Found {len(list_price_rates)} existing list prices")
+        
+        # Group by service to get latest list price per service
+        latest_list_prices = {}
+        for rate in list_price_rates:
+            service_id = rate.get('service_id', '')
+            effective_date = rate.get('effective_date', '')
+            
+            if not service_id:
+                continue
+                
+            try:
+                service_id_int = int(service_id)
+                # Validate rate values
+                float(rate.get('rate', 0))
+                float(rate.get('cogs_rate', 0))
+                
+                if service_id_int not in latest_list_prices or effective_date > latest_list_prices[service_id_int]['effective_date']:
+                    latest_list_prices[service_id_int] = rate
+            except (ValueError, TypeError):
+                continue
+        
+        print(f"📋 Found {len(latest_list_prices)} services with list prices")
+        
+        # Create indexed list prices
+        indexed_rates = []
+        skipped_invalid = 0
+        skipped_existing = 0
+        skipped_tiers = 0
+        
+        for service_id_int, rate_info in latest_list_prices.items():
+            try:
+                # Skip services with rate tiers
+                if str(service_id_int) in services_with_tiers:
+                    skipped_tiers += 1
+                    continue
+                
+                # Check if indexed list price already exists
+                if self._list_price_exists_for_date(service_id_int, formatted_date, existing_rates):
+                    skipped_existing += 1
+                    continue
+                
+                # Calculate new rates
+                current_rate = float(rate_info.get('rate', 0))
+                current_cogs = float(rate_info.get('cogs_rate', 0))
+                
+                if current_rate == 0 and current_cogs == 0:
+                    skipped_invalid += 1
+                    continue
+                
+                new_rate = current_rate * (1 + percentage / 100)
+                new_cogs = current_cogs * (1 + percentage / 100)
+                
+                indexed_rates.append({
+                    "service_id": service_id_int,
+                    "rate": round(new_rate, 6),
+                    "cogs": round(new_cogs, 6),
+                    "effective_date": display_date,
+                    "original_rate": current_rate,
+                    "original_cogs": current_cogs
+                })
+                
+            except (ValueError, TypeError) as e:
+                skipped_invalid += 1
+                continue
+        
+        if not indexed_rates:
+            print("❌ No list prices to index")
+            if skipped_existing > 0:
+                print(f"   • {skipped_existing} list prices already exist for target date")
+            if skipped_invalid > 0:
+                print(f"   • {skipped_invalid} list prices had invalid data")
+            if skipped_tiers > 0:
+                print(f"   • {skipped_tiers} services with rate tiers (not supported)")
+            return
+        
+        print(f"📋 Will create {len(indexed_rates)} indexed list prices")
+        if skipped_existing > 0:
+            print(f"   • {skipped_existing} list prices already exist (will skip)")
+        if skipped_invalid > 0:
+            print(f"   • {skipped_invalid} list prices had invalid data (skipped)")
+        if skipped_tiers > 0:
+            print(f"   • {skipped_tiers} services with rate tiers (skipped - not supported)")
+        
+        # Show sample of changes
+        print("\n📊 Sample of list price changes:")
+        for i, rate in enumerate(indexed_rates[:5]):
+            print(f"   • Service {rate['service_id']}: "
+                  f"{rate['original_rate']:.6f} → {rate['rate']:.6f} "
+                  f"(COGS: {rate['original_cogs']:.6f} → {rate['cogs']:.6f})")
+        
+        if len(indexed_rates) > 5:
+            print(f"   ... and {len(indexed_rates) - 5} more")
+        
+        # Final confirmation
+        confirm = questionary.confirm(
+            f"\nCreate {len(indexed_rates)} indexed list prices?",
+            default=True
+        ).ask()
+        
+        if not confirm:
+            print("Operation cancelled.")
+            return
+        
+        # Create the indexed list prices
+        self._create_indexed_list_prices_batch(indexed_rates)
+
+    def _list_price_exists_for_date(self, service_id: int, target_date: str, existing_rates: List[Dict]) -> bool:
+        """Check if a list price already exists for the target date"""
+        for rate in existing_rates:
+            account_id = rate.get('account_id', '')
+            # Check for list price (no account_id) and matching service/date
+            if (not account_id or account_id == '' or account_id == 'null') and \
+               str(rate.get('service_id', '')) == str(service_id) and \
+               rate.get('effective_date', '') == target_date:
+                return True
+        return False
+
+    def _create_indexed_list_prices_batch(self, indexed_rates: List[Dict]):
+        """Create indexed list prices using batch processing"""
+        print(f"🔄 Creating {len(indexed_rates)} indexed list prices...")
+        
+        created_count = 0
+        failed_count = 0
+        
+        # Process in batches of 50
+        batch_size = 50
+        total_batches = (len(indexed_rates) + batch_size - 1) // batch_size
+        
+        for i in range(0, len(indexed_rates), batch_size):
+            batch = indexed_rates[i:i+batch_size]
+            batch_num = i // batch_size + 1
+            
+            try:
+                print(f"   Creating batch {batch_num}/{total_batches} ({len(batch)} list prices)...")
+                result = self.api.create_list_price_revisions_batch(batch)
+                
+                # Count successful creations
+                atomic_results = result.get("atomic:results", [])
+                successful_in_batch = len([r for r in atomic_results if "data" in r])
+                created_count += successful_in_batch
+                
+                if successful_in_batch == len(batch):
+                    print(f"   ✅ Batch {batch_num} completed successfully")
+                else:
+                    print(f"   ⚠️  Batch {batch_num}: {successful_in_batch}/{len(batch)} created")
+                
+            except Exception as e:
+                print(f"   ❌ Batch {batch_num} failed: {e}")
+                print("   🔄 Falling back to individual list price creation...")
+                
+                # Fall back to individual creation for this batch
+                for rate in batch:
+                    try:
+                        self.api.create_list_price_revision(
+                            rate["service_id"], 
+                            rate["rate"], 
+                            rate["cogs"], 
+                            rate["effective_date"]
+                        )
+                        created_count += 1
+                    except Exception as e2:
+                        failed_count += 1
+                        print(f"   ❌ Failed to create list price for Service {rate['service_id']}: {e2}")
+        
+        # Clear dump cache since we added new rates
+        self.api.clear_dump_cache()
+        
+        # Summary
+        print(f"\n📊 List Price Indexation Summary:")
+        print(f"   ✅ Successfully created: {created_count} list price revisions")
+        if failed_count > 0:
+            print(f"   ❌ Failed: {failed_count} list price revisions")
         
         total_attempted = len(indexed_rates)
         success_rate = (created_count / total_attempted * 100) if total_attempted > 0 else 0
