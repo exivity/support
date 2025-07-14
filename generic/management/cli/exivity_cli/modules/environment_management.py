@@ -44,10 +44,11 @@ class EnvironmentManager:
             print("❌ Environment name is required")
             return
         
-        description = questionary.text("Description (optional):").ask() or ""
+        # Note: Description is NOT supported for environments in the API
+        # Using the same validated method as the main system
         
         try:
-            env_id = self.api.create_environment(name, description)
+            env_id = self.api.create_environment(name)  # No description parameter
             print(f"✅ Environment '{name}' created successfully (ID: {env_id})")
         except Exception as e:
             print(f"❌ Error creating environment: {e}")
