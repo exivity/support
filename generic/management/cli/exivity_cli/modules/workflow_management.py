@@ -27,7 +27,7 @@ class WorkflowManager:
         self.environments_folder.mkdir(parents=True, exist_ok=True)
 
     def create_hourly_workflow_interactive(self):
-        """Create workflow with 24-hour environment duplication - original logic"""
+        """Create workflow with 24-hour environment duplication"""
         name = questionary.text("Workflow name:").ask()
         if not name:
             print("❌ Workflow name is required")
@@ -61,7 +61,7 @@ class WorkflowManager:
         # Duplicate steps for all 24 hours
         all_steps = self._duplicate_steps_hourly(steps, env_map)
         
-        # Create workflow with all steps using atomic operationstal steps ({len(steps)} steps × 24 environments)")
+        # Create workflow with all steps using atomic operations
         try:
             workflow_id = self.api.create_workflow_with_steps(name, description, all_steps)
             print(f"✅ Workflow '{name}' ({workflow_id}) created with {len(all_steps)} steps across 24 hourly environments.")
@@ -78,12 +78,11 @@ class WorkflowManager:
                 print(f"❌ Error creating workflow: {e2}")
 
     def duplicate_workflow_interactive(self):
-        """Interactive workflow duplication - clone an existing workflow"""
+        """Interactive workflow duplication - clone an existing workflow exactly as-is"""
         print("📋 Workflow Duplication Tool")
-        print("Clone an existing workflow with optional modifications")
+        print("Clone an existing workflow exactly as-is")
         print("-" * 50)
         
-        # First, get a list of existing workflows
         try:
             existing_workflows = self._get_existing_workflows()
             if not existing_workflows:
@@ -155,11 +154,55 @@ class WorkflowManager:
                 print("Operation cancelled.")
                 return
             
-            # Perform the duplication
+            # Perform the duplication - copy exactly as-is
             self._duplicate_workflow(source_workflow, new_name, new_description, workflow_details)
             
         except Exception as e:
             print(f"❌ Error during workflow duplication: {e}")
+
+    def list_workflows_interactive(self):
+        """Interactive workflow listing with details"""
+        print("📋 Listing all workflows...")
+        
+        try:
+            workflows = self._get_existing_workflows()
+            
+            if not workflows:
+                print("❌ No workflows found")
+                return
+            
+            print(f"\n📊 Found {len(workflows)} workflow(s):")
+            print("-" * 80)
+            
+            for i, wf in enumerate(workflows, 1):
+                print(f"{i:3}. {wf['name']} (ID: {wf['id']})")
+                if wf.get('description'):
+                    print(f"     Description: {wf['description']}")
+                if wf.get('created_at'):
+                    print(f"     Created: {wf['created_at']}")
+                
+                # Get step count
+                try:
+                    details = self._get_workflow_details(wf['id'])
+                    if details:
+                        step_count = len(details.get('steps', []))
+                        print(f"     Steps: {step_count}")
+                        
+                        # Try to identify if it's hourly
+                        steps = details.get('steps', [])
+                        if steps:
+                            hourly_steps = self._analyze_hourly_pattern(steps)
+                            if hourly_steps:
+                                print(f"     Type: Hourly workflow ({len(hourly_steps)} unique × 24 environments)")
+                            else:
+                                print(f"     Type: Standard workflow")
+                except:
+                    print(f"     Steps: Unable to retrieve")
+                
+                print("-" * 80)
+                
+        except Exception as e:
+            print(f"❌ Error listing workflows: {e}")
 
     def _get_existing_workflows(self) -> List[Dict]:
         """Get list of all existing workflows"""
@@ -319,7 +362,7 @@ class WorkflowManager:
         return False
 
     def _duplicate_workflow(self, source_workflow: Dict, new_name: str, new_description: str, workflow_details: Dict):
-        """Perform the actual workflow duplication - copy exactly as-is with validation"""
+        """Perform the actual workflow duplication - copy exactly as-is"""
         print(f"🔄 Duplicating workflow '{source_workflow['name']}' as '{new_name}'...")
         
         try:
@@ -567,8 +610,62 @@ class WorkflowManager:
         
         return selected
 
+    def _analyze_hourly_pattern(self, steps: List[Dict]) -> Optional[List[Dict]]:
+        """Analyze if workflow follows hourly pattern - for display purposes only"""
+        # Group steps by their core attributes (excluding environment-specific data)
+        step_groups = {}
+        
+        for step in steps:
+            # Create a signature for the step type and core attributes
+            step_type = step.get('type', '')
+            attrs = step.get('attributes', {})
+            
+            # Build signature based on step type
+            if step_type in ('extract', 'transform'):
+                signature = (
+                    step_type,
+                    attrs.get('script', ''),
+                    attrs.get('from_date_offset', 0),
+                    attrs.get('to_date_offset', 0),
+                    attrs.get('arguments', '')
+                )
+            elif step_type == 'prepare_report':
+                signature = (
+                    step_type,
+                    attrs.get('report_id', ''),
+                    attrs.get('from_date_offset', 0),
+                    attrs.get('to_date_offset', 0)
+                )
+            else:
+                signature = (step_type, str(attrs))
+            
+            if signature not in step_groups:
+                step_groups[signature] = []
+            step_groups[signature].append(step)
+        
+        # Check if we have exactly 24 instances of each unique step (hourly pattern)
+        unique_steps = []
+        is_hourly = True
+        
+        for signature, group in step_groups.items():
+            if len(group) == 24:
+                # Take the first instance as the template
+                unique_steps.append(group[0])
+            elif len(group) == 1:
+                # Single step - could be prepare_report or non-environment step
+                unique_steps.append(group[0])
+            else:
+                # Not a clean 24-hour pattern
+                is_hourly = False
+                break
+        
+        if is_hourly and len(step_groups) > 0:
+            return unique_steps
+        else:
+            return None
+
     def _duplicate_steps_hourly(self, steps: List[Dict], env_map: Dict[str, str]) -> List[Dict]:
-        """Duplicate steps for each hourly environment - original logic with validation"""
+        """Duplicate steps for each hourly environment with validation"""
         duplicated = []
         
         print(f"🔄 Duplicating {len(steps)} step(s) across 24 environments...")

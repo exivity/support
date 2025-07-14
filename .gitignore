@@ -1,2 +1,1 @@
-generic/management/cli/csv/new_rates.csv
-generic/management/cli/csv/services_accounts_export_20250711_110858.csv
+*.csv

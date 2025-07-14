@@ -170,7 +170,6 @@ class ExivityAPI:
             return  # Success - no debug output needed
             
         except Exception as e:
-            print(f"DEBUG: v2 atomic rate creation failed for account {account_id}, service {service_id}: {e}")
             last_error = e
         
         # Approach 2: v1 API standard creation
@@ -204,11 +203,9 @@ class ExivityAPI:
             }
             
             self._request("POST", "/v1/rates", json=payload_v1, headers=headers_v1)
-            print(f"DEBUG: v1 rate creation succeeded for account {account_id}, service {service_id} (fallback)")
             return
             
         except Exception as e:
-            print(f"DEBUG: v1 rate creation failed for account {account_id}, service {service_id}: {e}")
             last_error = e
         
         # Approach 3: Simplified v2 rate creation
@@ -233,14 +230,14 @@ class ExivityAPI:
             }
             
             self._request("POST", "/v2/rates", json=payload_simple, headers=headers_simple)
-            print(f"DEBUG: Simplified v2 rate creation succeeded for account {account_id}, service {service_id} (fallback)")
             return
             
         except Exception as e:
-            print(f"DEBUG: Simplified v2 rate creation failed for account {account_id}, service {service_id}: {e}")
             last_error = e
         
-        # If all approaches fail, raise the last exception
+        # If all approaches fail, show debug info and raise the last exception
+        print(f"DEBUG: All rate creation approaches failed for account {account_id}, service {service_id}")
+        print(f"DEBUG: v2 atomic failed: {last_error}")
         raise Exception(f"All rate creation approaches failed for account {account_id}, service {service_id}. Last error: {last_error}")
 
     def create_rate_revisions_batch(self, rate_data: List[Dict]) -> Dict:
@@ -292,16 +289,104 @@ class ExivityAPI:
         resp = self._request("POST", "/v2/", json=payload, headers=headers)
         return resp.json()
 
+    def create_list_price_revision(self, service_id: int, rate: float, cogs: float, effective_date: str):
+        """Create single list price revision (default rate with no account)"""
+        # Convert date format from YYYYMMDD to YYYY-MM-DD for API
+        if len(effective_date) == 8 and effective_date.isdigit():
+            formatted_date = f"{effective_date[:4]}-{effective_date[4:6]}-{effective_date[6:8]}"
+        else:
+            formatted_date = effective_date
+        
+        # Use v2 atomic operations for list price creation
+        operation = {
+            "op": "add",
+            "data": {
+                "type": "rate",
+                "attributes": {
+                    "rate": rate,
+                    "rate_col": None,
+                    "min_commit": 0,  # List prices typically have min_commit = 0
+                    "effective_date": formatted_date,
+                    "end_date": None,
+                    "fixed": None,
+                    "fixed_col": None,
+                    "cogs_rate": cogs,
+                    "cogs_rate_col": None,
+                    "cogs_fixed": None,
+                    "cogs_fixed_col": None,
+                    "tier_aggregation_level": None
+                },
+                "relationships": {
+                    "service": {"data": {"id": str(service_id), "type": "service"}},
+                    "account": {"data": None},  # No account = list price
+                    "ratetiers": {"data": []}
+                },
+                "lid": str(uuid.uuid4())
+            }
+        }
+        
+        payload = {"atomic:operations": [operation]}
+        headers = {
+            "Content-Type": "application/vnd.api+json;ext=\"https://jsonapi.org/ext/atomic\"",
+            "Accept": "application/vnd.api+json"
+        }
+        
+        self._request("POST", "/v2/", json=payload, headers=headers)
+
+    def create_list_price_revisions_batch(self, rate_data: List[Dict]) -> Dict:
+        """Create multiple list price revisions using atomic operations"""
+        operations = []
+        
+        for rate in rate_data:
+            # Convert date format from YYYYMMDD to YYYY-MM-DD for API
+            effective_date = rate["effective_date"]
+            if len(effective_date) == 8 and effective_date.isdigit():
+                formatted_date = f"{effective_date[:4]}-{effective_date[4:6]}-{effective_date[6:8]}"
+            else:
+                formatted_date = effective_date
+            
+            operation = {
+                "op": "add",
+                "data": {
+                    "type": "rate",
+                    "attributes": {
+                        "rate": float(rate["rate"]),
+                        "rate_col": None,
+                        "min_commit": 0,  # List prices typically have min_commit = 0
+                        "effective_date": formatted_date,
+                        "end_date": None,
+                        "fixed": None,
+                        "fixed_col": None,
+                        "cogs_rate": float(rate["cogs"]),
+                        "cogs_rate_col": None,
+                        "cogs_fixed": None,
+                        "cogs_fixed_col": None,
+                        "tier_aggregation_level": None
+                    },
+                    "relationships": {
+                        "service": {"data": {"id": str(rate["service_id"]), "type": "service"}},
+                        "account": {"data": None},  # No account = list price
+                        "ratetiers": {"data": []}
+                    },
+                    "lid": str(uuid.uuid4())
+                }
+            }
+            operations.append(operation)
+        
+        payload = {"atomic:operations": operations}
+        headers = {
+            "Content-Type": "application/vnd.api+json;ext=\"https://jsonapi.org/ext/atomic\"",
+            "Accept": "application/vnd.api+json"
+        }
+        
+        resp = self._request("POST", "/v2/", json=payload, headers=headers)
+        return resp.json()
+
     # ------------------------- workflows ------------------------- #
     def find_workflows_by_name(self, name: str) -> List[str]:
         """Find workflows by name and return their IDs"""
         try:
-            # Set page[limit] to -1 to fetch all workflows and filter by name
-            params = {
-                "filter[name]": name,
-                "page[limit]": -1
-            }
-            resp = self._request("GET", "/v2/workflows", params=params)
+            resp = self._request("GET", "/v2/workflows", params={"filter[name]": name})
             data = resp.json().get("data", [])
             return [item["id"] for item in data]
         except Exception:
@@ -468,125 +553,6 @@ class ExivityAPI:
             
             # Re-raise the original exception
             raise e
-
-    # ------------------------- scripts and reports for workflow steps ------------------------- #
-    def get_available_scripts(self) -> Dict[str, List[str]]:
-        """Get available extract and transform scripts from correct endpoints"""
-        try:
-            extract_scripts = []
-            transform_scripts = []
-            
-            # Get extractors from /v2/extractors
-            try:
-                resp = self._request("GET", "/v2/extractors", params={"page[limit]": -1})
-                extractors_data = resp.json().get("data", [])
-                
-                for extractor in extractors_data:
-                    extractor_name = extractor.get("attributes", {}).get("name", "")
-                    if extractor_name:
-                        extract_scripts.append(extractor_name)
-                        
-                print(f"DEBUG: Found {len(extract_scripts)} extractors from /v2/extractors")
-                        
-            except Exception as e:
-                print(f"DEBUG: /v2/extractors endpoint failed: {e}")
-            
-            # Get transformers from /v2/transformers
-            try:
-                resp = self._request("GET", "/v2/transformers", params={"page[limit]": -1})
-                transformers_data = resp.json().get("data", [])
-                
-                for transformer in transformers_data:
-                    transformer_name = transformer.get("attributes", {}).get("name", "")
-                    if transformer_name:
-                        transform_scripts.append(transformer_name)
-                        
-                print(f"DEBUG: Found {len(transform_scripts)} transformers from /v2/transformers")
-                        
-            except Exception as e:
-                print(f"DEBUG: /v2/transformers endpoint failed: {e}")
-            
-            # If no scripts found via API, provide some common examples
-            if not extract_scripts and not transform_scripts:
-                print("⚠️  Could not fetch scripts from API, using common examples")
-                extract_scripts = [
-                    "extract_usage_data", "extract_billing_data", "extract_accounts",
-                    "extract_services", "extract_reports", "extract_raw_data"
-                ]
-                transform_scripts = [
-                    "transform_usage", "transform_billing", "calculate_costs",
-                    "aggregate_data", "apply_rates", "generate_invoices"
-                ]
-            
-            return {
-                "extract": sorted(list(set(extract_scripts))),
-                "transform": sorted(list(set(transform_scripts)))
-            }
-            
-        except Exception as e:
-            print(f"DEBUG: Error fetching scripts: {e}")
-            # Return common examples as fallback
-            return {
-                "extract": ["extract_usage_data", "extract_billing_data", "extract_accounts"],
-                "transform": ["transform_usage", "calculate_costs", "apply_rates"]
-            }
-
-    def get_available_reports(self) -> List[Dict[str, str]]:
-        """Get available reports from /v2/reportdefinitions endpoint"""
-        try:
-            reports = []
-            
-            # Get report definitions from /v2/reportdefinitions
-            try:
-                resp = self._request("GET", "/v2/reportdefinitions", params={"page[limit]": -1})
-                reports_data = resp.json().get("data", [])
-                
-                for report in reports_data:
-                    report_id = report.get("id", "")
-                    report_name = report.get("attributes", {}).get("name", "")
-                    report_description = report.get("attributes", {}).get("description", "")
-                    
-                    if report_id and report_name:
-                        reports.append({
-                            "id": report_id,
-                            "name": report_name,
-                            "description": report_description
-                        })
-                        
-                print(f"DEBUG: Found {len(reports)} report definitions from /v2/reportdefinitions")
-                        
-            except Exception as e:
-                print(f"DEBUG: /v2/reportdefinitions endpoint failed: {e}")
-                
-                # Fallback to dump data if API endpoint fails
-                try:
-                    dump_data = self.fetch_dump_data()
-                    report_definitions = dump_data.get('reportdefinition', [])
-                    
-                    for report in report_definitions:
-                        report_id = report.get('id', '')
-                        report_name = report.get('name', '')
-                        report_description = report.get('description', '')
-                        
-                        if report_id and report_name:
-                            reports.append({
-                                "id": report_id,
-                                "name": report_name.strip('"'),
-                                "description": report_description.strip('"') if report_description else ""
-                            })
-                            
-                    print(f"DEBUG: Found {len(reports)} report definitions from dump data fallback")
-                            
-                except Exception as e2:
-                    print(f"DEBUG: Dump data reports fallback also failed: {e2}")
-            
-            # Sort by name
-            reports.sort(key=lambda x: x["name"])
-            return reports
-            
-        except Exception as e:
-            print(f"DEBUG: Error fetching reports: {e}")
-            return []
 
     # ------------------------- environments ------------------------- #
     def find_environment_by_name(self, name: str) -> Optional[str]:
@@ -882,11 +848,11 @@ class ExivityAPI:
 
     # ------------------------- dump data for insights ------------------------- #
     def fetch_dump_data(self) -> Dict[str, List[Dict]]:
-        """Fetch comprehensive dump data including accounts, services, and rates"""
+        """Fetch comprehensive dump data including accounts, services, rates, and rate tiers"""
         try:
-            # Use v1/dump/data with correct parameters and content type
+            # Include ratetier model to detect services with rate tiers
             params = {
-                "models": "account,adjustment,adjustables,metadata,rate,reportdefinition,service,servicecategory",
+                "models": "account,adjustment,adjustables,metadata,rate,ratetier,reportdefinition,service,servicecategory",
                 "progress": "0"
             }
             headers = {
@@ -899,13 +865,12 @@ class ExivityAPI:
             
         except Exception as e:
             print(f"❌ Failed to fetch dump data: {e}")
-            print(f"DEBUG: Trying alternative dump endpoint formats...")
             
             # Try alternative formats - all using v1/dump/data
             alternatives = [
                 {
                     "endpoint": "/v1/dump/data",
-                    "params": {"models": "account,rate,service", "progress": "0"},
+                    "params": {"models": "account,rate,ratetier,service", "progress": "0"},
                     "headers": {"Accept": "text/csv"}
                 },
                 {
@@ -917,26 +882,16 @@ class ExivityAPI:
                     "endpoint": "/v1/dump/data",
                     "params": {"models": "account", "progress": "0"},
                     "headers": {"Accept": "text/csv"}
-                },
-                # Fallback to v2 if v1 doesn't work
-                {
-                    "endpoint": "/v2/dump",
-                    "params": {"data": "account,service,rate", "progress": "0"},
-                    "headers": {"Accept": "text/csv"}
                 }
             ]
             
             for i, alt in enumerate(alternatives, 1):
                 try:
-                    print(f"DEBUG: Trying alternative {i}: {alt['endpoint']} with params: {alt['params']}")
                     resp = self._request("GET", alt['endpoint'], params=alt['params'], headers=alt['headers'])
-                    print(f"DEBUG: Alternative {i} succeeded!")
                     return self._parse_dump_response(resp.text)
                 except Exception as e2:
-                    print(f"DEBUG: Alternative {i} failed: {e2}")
                     continue
             
-            print("DEBUG: All dump formats failed, returning empty data")
             return {}
 
     def _parse_dump_response(self, dump_text: str) -> Dict[str, List[Dict]]:
@@ -945,10 +900,7 @@ class ExivityAPI:
         current_model = None
         current_headers = None
         
-        print(f"DEBUG: Parsing dump response, {len(dump_text)} characters")
-        
         lines = dump_text.strip().split('\n')
-        print(f"DEBUG: Found {len(lines)} lines in dump")
         
         for line_num, line in enumerate(lines):
             line = line.strip()
@@ -960,7 +912,6 @@ class ExivityAPI:
                 current_model = line.replace('###model:', '').replace('###', '').strip()
                 models[current_model] = []
                 current_headers = None
-                print(f"DEBUG: Found model: {current_model}")
                 continue
             
             # Skip if no current model
@@ -971,17 +922,12 @@ class ExivityAPI:
             if current_headers is None:
                 # First line after model header is the headers
                 current_headers = [h.strip() for h in line.split(',')]
-                print(f"DEBUG: Headers for {current_model}: {current_headers}")
             else:
                 # Data rows - handle CSV parsing with potential commas in quoted strings
                 values = self._parse_csv_line(line)
                 if len(values) == len(current_headers):
                     row_dict = dict(zip(current_headers, values))
                     models[current_model].append(row_dict)
-        
-        print(f"DEBUG: Parsed models: {list(models.keys())}")
-        for model, data in models.items():
-            print(f"DEBUG: Model {model} has {len(data)} records")
         
         return models
 
