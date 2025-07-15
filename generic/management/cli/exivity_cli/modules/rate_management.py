@@ -140,6 +140,9 @@ class RateManager:
         print("📊 Loading system data for duplicate checking...")
         dump_data = self.api.fetch_dump_data()
         
+        # Get services with rate tiers to exclude them
+        services_with_tiers = self._get_services_with_rate_tiers(dump_data)
+        
         # Build existing rates lookup for fast duplicate checking
         existing_rates_lookup = set()
         for rate in dump_data.get('rate', []):
@@ -149,6 +152,8 @@ class RateManager:
             existing_rates_lookup.add((account_id, service_id, effective_date))
         
         print(f"📋 Found {len(existing_rates_lookup)} existing rates in system")
+        if services_with_tiers:
+            print(f"📋 Found {len(services_with_tiers)} services with rate tiers (will be skipped)")
 
         # Re-open with the successful encoding for processing
         with open(csv_path, 'r', newline='', encoding=encoding) as f:
@@ -169,6 +174,7 @@ class RateManager:
             # Collect all rate data and check for existing revisions using dump data
             new_rates = []
             skipped_count = 0
+            skipped_tiers = 0
             processed_rows = 0
             error_rows = 0
             
@@ -184,6 +190,12 @@ class RateManager:
                     rate = float(cleaned_row["rate"])
                     cogs = float(cleaned_row["cogs"])
                     eff_date = cleaned_row["revision_start_date"]
+                    
+                    # Check if this service has rate tiers - skip if it does
+                    if str(svc) in services_with_tiers:
+                        print(f"Row {row_num}: Service {svc} has rate tiers (not supported) - skipping")
+                        skipped_tiers += 1
+                        continue
                     
                     # Convert date format for lookup
                     if len(eff_date) == 8 and eff_date.isdigit():
@@ -217,6 +229,8 @@ class RateManager:
             print(f"   • Total data rows processed: {processed_rows}")
             print(f"   • New rates to create: {len(new_rates)}")
             print(f"   • Skipped existing rates: {skipped_count}")
+            if skipped_tiers > 0:
+                print(f"   • Skipped services with rate tiers: {skipped_tiers}")
             if error_rows > 0:
                 print(f"   • Rows with errors: {error_rows}")
             
@@ -268,7 +282,9 @@ class RateManager:
             print(f"   • Total data rows in file: {processed_rows}")
             print(f"   • Successfully processed: {processed_count} rows")
             print(f"   • Skipped (already exist): {skipped_count} rows")
-            print(f"   • Errors: {processed_rows - processed_count - skipped_count} rows")
+            if skipped_tiers > 0:
+                print(f"   • Skipped (services with rate tiers): {skipped_tiers} rows")
+            print(f"   • Errors: {processed_rows - processed_count - skipped_count - skipped_tiers} rows")
 
     def debug_api_connectivity(self):
         """Debug API connectivity and available endpoints"""
@@ -607,12 +623,23 @@ class RateManager:
             print("💡 List prices are default rates for services with manual rate configuration")
             return
         
-        # Build service lookup
+        # Build service lookup - handle both dump format and direct service data
         service_lookup = {}
         for service in services:
             service_id = service.get('id', '')
             if service_id:
-                service_lookup[service_id] = service
+                # Extract service information from dump format
+                service_info = {
+                    'key': service.get('key', ''),
+                    'description': service.get('description', '')
+                }
+                # Also check attributes if it's in JSON:API format
+                if 'attributes' in service:
+                    attrs = service['attributes']
+                    service_info['key'] = attrs.get('key', service_info['key'])
+                    service_info['description'] = attrs.get('description', service_info['description'])
+                
+                service_lookup[service_id] = service_info
         
         # Prepare CSV data
         csv_data = []
@@ -630,8 +657,8 @@ class RateManager:
             csv_row = {
                 'account_id': '',  # Empty for list prices
                 'service_id': service_id_int,
-                'service_key': service_info.get('attributes', {}).get('key', ''),
-                'service_description': service_info.get('attributes', {}).get('description', ''),
+                'service_key': service_info.get('key', ''),
+                'service_description': service_info.get('description', ''),
                 'rate': float(rate_info.get('rate', 0)),
                 'cogs': float(rate_info.get('cogs_rate', 0)),
                 'revision_start_date': revision_start_date,
@@ -728,18 +755,38 @@ class RateManager:
             print("💡 Account-specific rates are custom rates that override default list prices")
             return
         
-        # Build lookups
+        # Build lookups - handle both dump format and direct service data
         service_lookup = {}
         for service in services:
             service_id = service.get('id', '')
             if service_id:
-                service_lookup[service_id] = service
+                # Extract service information from dump format
+                service_info = {
+                    'key': service.get('key', ''),
+                    'description': service.get('description', '')
+                }
+                # Also check attributes if it's in JSON:API format
+                if 'attributes' in service:
+                    attrs = service['attributes']
+                    service_info['key'] = attrs.get('key', service_info['key'])
+                    service_info['description'] = attrs.get('description', service_info['description'])
+                
+                service_lookup[service_id] = service_info
         
         account_lookup = {}
         for account in accounts:
             account_id = account.get('id', '')
             if account_id:
-                account_lookup[account_id] = account
+                # Extract account information from dump format
+                account_info = {
+                    'name': account.get('name', '')
+                }
+                # Also check attributes if it's in JSON:API format
+                if 'attributes' in account:
+                    attrs = account['attributes']
+                    account_info['name'] = attrs.get('name', account_info['name'])
+                
+                account_lookup[account_id] = account_info
         
         # Prepare CSV data
         csv_data = []
@@ -759,10 +806,10 @@ class RateManager:
             
             csv_row = {
                 'account_id': account_id_int,
-                'account_name': account_info.get('attributes', {}).get('name', ''),
+                'account_name': account_info.get('name', ''),
                 'service_id': service_id_int,
-                'service_key': service_info.get('attributes', {}).get('key', ''),
-                'service_description': service_info.get('attributes', {}).get('description', ''),
+                'service_key': service_info.get('key', ''),
+                'service_description': service_info.get('description', ''),
                 'rate': float(rate_info.get('rate', 0)),
                 'cogs': float(rate_info.get('cogs_rate', 0)),
                 'revision_start_date': revision_start_date,
