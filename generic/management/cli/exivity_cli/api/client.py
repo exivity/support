@@ -524,17 +524,6 @@ class ExivityAPI:
             "Accept": "application/vnd.api+json"
         }
         
-        # Add debug output before sending the request
-        print(f"DEBUG: Sending atomic workflow creation request (GUI format)")
-        print(f"DEBUG: Workflow name: {name}")
-        print(f"DEBUG: Number of operations: {len(operations)}")
-        print(f"DEBUG: First operation (workflow): {operations[0]}")
-        if len(operations) > 1:
-            print(f"DEBUG: Second operation (first step): {operations[1]}")
-        if len(operations) > 2:
-            print(f"DEBUG: Third operation (second step): {operations[2]}")
-        print(f"DEBUG: URL: {self.base_url}/v2/")
-        
         try:
             resp = self._request("POST", "/v2/", json=payload, headers=headers)
             results = resp.json().get("atomic:results", [])
@@ -544,7 +533,6 @@ class ExivityAPI:
                 workflow_id = workflow_data.get("id", "")
                 
                 if workflow_id:
-                    print(f"✅ Workflow '{name}' created successfully (ID: {workflow_id})")
                     return workflow_id
                 else:
                     raise Exception("No workflow ID returned from atomic operation")
@@ -552,35 +540,6 @@ class ExivityAPI:
                 raise Exception("No results returned from atomic operation")
                 
         except Exception as e:
-            print(f"❌ Atomic workflow creation failed: {e}")
-            
-            # Enhanced error debugging
-            if hasattr(e, 'response') and e.response:
-                print(f"DEBUG: Response status code: {e.response.status_code}")
-                print(f"DEBUG: Response headers: {dict(e.response.headers)}")
-                try:
-                    error_json = e.response.json()
-                    print(f"DEBUG: Error response JSON: {error_json}")
-                    
-                    # Show specific validation errors if available
-                    if "errors" in error_json:
-                        print(f"DEBUG: Validation errors:")
-                        for error in error_json["errors"]:
-                            print(f"  - Status: {error.get('status', 'Unknown')}")
-                            print(f"  - Title: {error.get('title', 'Unknown')}")
-                            print(f"  - Detail: {error.get('detail', 'No details')}")
-                            if 'source' in error:
-                                print(f"  - Source: {error['source']}")
-                            
-                except Exception as json_error:
-                    print(f"DEBUG: Could not parse error JSON: {json_error}")
-                    print(f"DEBUG: Raw error response: {e.response.text}")
-                    
-                # Show the exact payload that caused the error
-                import json
-                print(f"DEBUG: EXACT PAYLOAD THAT CAUSED 422 ERROR:")
-                print(json.dumps(payload, indent=2))
-            
             raise
 
     def get_available_scripts(self) -> Dict[str, List[str]]:
