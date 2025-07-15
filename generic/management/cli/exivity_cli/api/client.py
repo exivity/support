@@ -415,12 +415,12 @@ class ExivityAPI:
         return resp.json()["data"]["id"]
 
     def create_workflow_with_steps(self, name: str, description: str, steps: List[Dict]) -> str:
-        """Create a workflow with steps using atomic operations - EXACT format from working GUI"""
-        workflow_lid = str(uuid.uuid4())
+        """Create workflow with all steps using atomic operations matching GUI format exactly"""
         operations = []
         
-        # Create workflow operation with proper relationships structure
-        workflow_operation = {
+        # Create workflow operation with steps and schedules relationships
+        workflow_lid = str(uuid.uuid4())
+        operations.append({
             "op": "add",
             "data": {
                 "type": "workflow",
@@ -434,125 +434,215 @@ class ExivityAPI:
                 },
                 "lid": workflow_lid
             }
-        }
-        operations.append(workflow_operation)
+        })
         
-        # Add step operations with proper chaining and structure
-        previous_step_lid = None
-        
+        # Create step operations with correct structure matching GUI exactly
+        step_lids = []
         for i, step in enumerate(steps):
             step_lid = str(uuid.uuid4())
+            step_lids.append(step_lid)
             
-            # Build step options (nested under options, not direct attributes)
-            step_options = {}
+            # Build step attributes based on type
+            step_type = step.get("type")
+            step_attrs = step.get("attributes", {})
             
-            # Add script name
-            if "script" in step["attributes"]:
-                step_options["script"] = step["attributes"]["script"]
-            
-            # Add date offsets for extract/transform steps
-            if step["type"] in ("extract", "transform"):
-                step_options["from_date_offset"] = step["attributes"].get("from_date_offset", 0)
-                step_options["to_date_offset"] = step["attributes"].get("to_date_offset", 0)
-                
-                # Environment ID as string (required for extract/transform)
-                if "environment_id" in step["attributes"]:
-                    step_options["environment_id"] = str(step["attributes"]["environment_id"])
-            
-            # Add report_id for prepare_report steps
-            if step["type"] == "prepare_report" and "report_id" in step["attributes"]:
-                step_options["report_id"] = step["attributes"]["report_id"]
-                step_options["from_date_offset"] = step["attributes"].get("from_date_offset", 0)
-                step_options["to_date_offset"] = step["attributes"].get("to_date_offset", 0)
-            
-            # Add arguments if present (for extract steps)
-            if "arguments" in step["attributes"] and step["attributes"]["arguments"]:
-                step_options["arguments"] = step["attributes"]["arguments"]
-            
-            # Build previous relationship
-            previous_relationship = {"data": None}
-            if previous_step_lid:
-                previous_relationship = {
-                    "data": {
-                        "lid": previous_step_lid,
-                        "type": "workflowstep"
+            # Create proper step structure matching GUI exactly
+            step_data = {
+                "type": "workflowstep",
+                "attributes": {
+                    "step_type": step_type,
+                    "options": {},
+                    "wait": True,
+                    "timeout": 3600
+                },
+                "relationships": {
+                    "workflow": {
+                        "data": {
+                            "lid": workflow_lid,
+                            "type": "workflow"
+                        }
+                    },
+                    "previous": {
+                        "data": None if i == 0 else {
+                            "lid": step_lids[i-1],
+                            "type": "workflowstep"
+                        }
                     }
-                }
-            
-            step_operation = {
-                "op": "add",
-                "data": {
-                    "type": "workflowstep",
-                    "attributes": {
-                        "step_type": step["type"],
-                        "options": step_options,  # Nest all options here
-                        "wait": True,  # Required
-                        "timeout": 3600  # Required
-                    },
-                    "relationships": {
-                        "workflow": {
-                            "data": {
-                                "lid": workflow_lid,
-                                "type": "workflow"
-                            }
-                        },
-                        "previous": previous_relationship
-                    },
-                    "lid": step_lid
-                }
+                },
+                "lid": step_lid
             }
             
-            operations.append(step_operation)
-            previous_step_lid = step_lid  # For chaining next step
+            # Set step-specific options - match GUI format exactly
+            if step_type == "extract":
+                step_data["attributes"]["options"] = {
+                    "script": step_attrs.get("script", ""),
+                    "from_date_offset": step_attrs.get("from_date_offset", 0),
+                    "to_date_offset": step_attrs.get("to_date_offset", 0)
+                }
+                
+                # Add arguments if provided
+                if step_attrs.get("arguments"):
+                    step_data["attributes"]["options"]["arguments"] = step_attrs["arguments"]
+                
+                # Only add environment_id if it's not the default environment (1)
+                # GUI doesn't include environment_id for default environment
+                if step_attrs.get("environment_id") and step_attrs.get("environment_id") != 1:
+                    step_data["attributes"]["options"]["environment_id"] = step_attrs["environment_id"]
+                    
+            elif step_type == "transform":
+                step_data["attributes"]["options"] = {
+                    "script": step_attrs.get("script", ""),
+                    "from_date_offset": step_attrs.get("from_date_offset", 0),
+                    "to_date_offset": step_attrs.get("to_date_offset", 0)
+                }
+                
+                # Only add environment_id if it's not the default environment (1)
+                # GUI doesn't include environment_id for default environment
+                if step_attrs.get("environment_id") and step_attrs.get("environment_id") != 1:
+                    step_data["attributes"]["options"]["environment_id"] = step_attrs["environment_id"]
+                    
+            elif step_type == "prepare_report":
+                step_data["attributes"]["options"] = {
+                    "report_id": step_attrs.get("report_id", 0),
+                    "from_date_offset": step_attrs.get("from_date_offset", 0),
+                    "to_date_offset": step_attrs.get("to_date_offset", 0)
+                }
+            
+            operations.append({
+                "op": "add",
+                "data": step_data
+            })
         
-        payload = {"atomic:operations": operations}
+        # Execute atomic operations
+        payload = {
+            "atomic:operations": operations
+        }
+        
+        # Set proper headers to match GUI
         headers = {
             "Content-Type": "application/vnd.api+json;ext=\"https://jsonapi.org/ext/atomic\"",
             "Accept": "application/vnd.api+json"
         }
         
+        # Add debug output before sending the request
+        print(f"DEBUG: Sending atomic workflow creation request (GUI format)")
+        print(f"DEBUG: Workflow name: {name}")
+        print(f"DEBUG: Number of operations: {len(operations)}")
+        print(f"DEBUG: First operation (workflow): {operations[0]}")
+        if len(operations) > 1:
+            print(f"DEBUG: Second operation (first step): {operations[1]}")
+        if len(operations) > 2:
+            print(f"DEBUG: Third operation (second step): {operations[2]}")
+        print(f"DEBUG: URL: {self.base_url}/v2/")
+        
         try:
             resp = self._request("POST", "/v2/", json=payload, headers=headers)
+            results = resp.json().get("atomic:results", [])
             
-            # Extract workflow ID from atomic results
-            atomic_results = resp.json().get("atomic:results", [])
-            
-            for result in atomic_results:
-                if result.get("data", {}).get("type") == "workflow":
-                    workflow_id = result["data"]["id"]
+            if results and len(results) > 0:
+                workflow_data = results[0].get("data", {})
+                workflow_id = workflow_data.get("id", "")
+                
+                if workflow_id:
+                    print(f"✅ Workflow '{name}' created successfully (ID: {workflow_id})")
                     return workflow_id
-            
-            raise Exception("Could not find workflow ID in atomic results")
-            
+                else:
+                    raise Exception("No workflow ID returned from atomic operation")
+            else:
+                raise Exception("No results returned from atomic operation")
+                
         except Exception as e:
             print(f"❌ Atomic workflow creation failed: {e}")
+            
+            # Enhanced error debugging
             if hasattr(e, 'response') and e.response:
-                print(f"Response status code: {e.response.status_code}")
+                print(f"DEBUG: Response status code: {e.response.status_code}")
+                print(f"DEBUG: Response headers: {dict(e.response.headers)}")
                 try:
-                    error_details = e.response.json()
-                    print("Error details:")
-                    import json
-                    print(json.dumps(error_details, indent=2))
+                    error_json = e.response.json()
+                    print(f"DEBUG: Error response JSON: {error_json}")
                     
-                    # Extract specific error information
-                    if "errors" in error_details:
-                        for error in error_details["errors"]:
-                            status = error.get("status", "Unknown")
-                            title = error.get("title", "Unknown Error")
-                            detail = error.get("detail", "No details provided")
-                            source = error.get("source", {})
-                            print(f"Error - Status: {status}, Title: {title}")
-                            print(f"Detail: {detail}")
-                            if source:
-                                print(f"Source: {source}")
+                    # Show specific validation errors if available
+                    if "errors" in error_json:
+                        print(f"DEBUG: Validation errors:")
+                        for error in error_json["errors"]:
+                            print(f"  - Status: {error.get('status', 'Unknown')}")
+                            print(f"  - Title: {error.get('title', 'Unknown')}")
+                            print(f"  - Detail: {error.get('detail', 'No details')}")
+                            if 'source' in error:
+                                print(f"  - Source: {error['source']}")
                             
                 except Exception as json_error:
-                    print(f"Could not parse error response as JSON: {json_error}")
-                    print(f"Raw error response:")
-                    print(e.response.text)
+                    print(f"DEBUG: Could not parse error JSON: {json_error}")
+                    print(f"DEBUG: Raw error response: {e.response.text}")
+                    
+                # Show the exact payload that caused the error
+                import json
+                print(f"DEBUG: EXACT PAYLOAD THAT CAUSED 422 ERROR:")
+                print(json.dumps(payload, indent=2))
             
-            # Re-raise the original exception
-            raise e
+            raise
+
+    def get_available_scripts(self) -> Dict[str, List[str]]:
+        """Get available extract and transform scripts from v2 endpoints"""
+        try:
+            scripts = {
+                "extract": [],
+                "transform": []
+            }
+            
+            # Get extractors
+            try:
+                resp = self._request("GET", "/v2/extractors")
+                extractors = resp.json().get("data", [])
+                scripts["extract"] = [
+                    extractor.get("attributes", {}).get("name", "")
+                    for extractor in extractors
+                    if extractor.get("attributes", {}).get("name")
+                ]
+            except Exception as e:
+                print(f"   ⚠️  Error fetching extractors: {e}")
+            
+            # Get transformers
+            try:
+                resp = self._request("GET", "/v2/transformers")
+                transformers = resp.json().get("data", [])
+                scripts["transform"] = [
+                    transformer.get("attributes", {}).get("name", "")
+                    for transformer in transformers
+                    if transformer.get("attributes", {}).get("name")
+                ]
+            except Exception as e:
+                print(f"   ⚠️  Error fetching transformers: {e}")
+            
+            return scripts
+            
+        except Exception as e:
+            print(f"   ⚠️  Error loading scripts: {e}")
+            return {"extract": [], "transform": []}
+
+    def get_available_reports(self) -> List[Dict[str, str]]:
+        """Get available report definitions from v2 endpoint"""
+        try:
+            resp = self._request("GET", "/v2/reportdefinitions")
+            reports = resp.json().get("data", [])
+            
+            report_list = []
+            for report in reports:
+                attributes = report.get("attributes", {})
+                report_info = {
+                    "id": report.get("id", ""),
+                    "name": attributes.get("name", ""),
+                    "description": attributes.get("description", "")
+                }
+                if report_info["id"] and report_info["name"]:
+                    report_list.append(report_info)
+            
+            return report_list
+            
+        except Exception as e:
+            print(f"   ⚠️  Error loading reports: {e}")
+            return []
 
     # ------------------------- environments ------------------------- #
     def find_environment_by_name(self, name: str) -> Optional[str]:

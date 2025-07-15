@@ -703,14 +703,14 @@ class WorkflowManager:
         
         # Check required attributes based on step type
         if step_type == "extract":
-            required = ["script", "from_date_offset", "to_date_offset", "environment_id"]
+            required = ["script", "from_date_offset", "to_date_offset"]
             missing = [attr for attr in required if attr not in attributes]
             if missing:
                 print(f"   ❌ Extract step missing: {missing}")
                 return False
                 
         elif step_type == "transform":
-            required = ["script", "from_date_offset", "to_date_offset", "environment_id"]
+            required = ["script", "from_date_offset", "to_date_offset"]
             missing = [attr for attr in required if attr not in attributes]
             if missing:
                 print(f"   ❌ Transform step missing: {missing}")
