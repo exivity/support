@@ -1,7 +1,0 @@
-﻿service_key,service_name,service_id,account_key,account_name,account_id,report_level,revision_start_date,rate,cogs
-vCPU Count,vCPU Count,79,ACME,ACME,1567,1,2026-10-01,1.82,0.9434
-crm000111001,CRM Software License-test,360,Engineering,Engineering,1571,2,2026-10-01,129.097169,115.715369
-Disk Storage,Disk Storage,71,Engineering,Engineering,1571,2,2023-03,135.65664,129.1968
-vRAM,vRAM,80,Engineering,Engineering,1571,2,2026-10-01,5.744224,4.1616
-crm000111001,CRM Software License-test,360,Marketing,Marketing,1572,2,2026-10-01,3.504654,2.209237
-crm000111001,CRM Software License-test,360,Sales,Sales,1568,2,2026-10-01,28.0504,21.8484

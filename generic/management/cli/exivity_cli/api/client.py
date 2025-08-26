@@ -687,7 +687,7 @@ class ExivityAPI:
         return env_id
 
     def ensure_hourly_environments(self) -> Dict[str, str]:
-        """Ensure all 24 hourly environments (H00-H23) exist, return name->id map"""
+        """Ensure all 24 hourly environments (hour_00-hour_23) exist, return name->id map"""
         env_map = {}
         
         print("🔍 Checking hourly environments...")
@@ -701,7 +701,7 @@ class ExivityAPI:
             print("   ⚠️  No default environment found")
         
         for hour in range(24):
-            env_name = f"H{hour:02d}"
+            env_name = f"hour_{hour:02d}"
             env_id = self.find_environment_by_name(env_name)
             
             if env_id:
@@ -762,7 +762,7 @@ class ExivityAPI:
                 raise Exception(f"Failed to delete environment: {e}")
 
     def delete_hourly_environments(self):
-        """Delete all hourly environments H00-H23, but protect the default environment"""
+        """Delete all hourly environments hour_00-hour_23, but protect the default environment"""
         print("🗑️  Deleting hourly environments...")
         print("💡 Note: Default environment will be protected from deletion")
         
@@ -778,7 +778,7 @@ class ExivityAPI:
         
         # Try to delete all hourly environments, but respect default protection
         for hour in range(24):
-            env_name = f"H{hour:02d}"
+            env_name = f"hour_{hour:02d}"
             env_id = self.find_environment_by_name(env_name)
             
             if env_id:
@@ -809,14 +809,14 @@ class ExivityAPI:
             print(f"💡 The default environment cannot be deleted to maintain system integrity")
 
     def list_hourly_environments(self):
-        """List status of all hourly environments H00-H23"""
+        """List status of all hourly environments hour_00-hour_23"""
         print("📋 Hourly Environments Status:")
         
         existing_count = 0
         missing_count = 0
         
         for hour in range(24):
-            env_name = f"H{hour:02d}"
+            env_name = f"hour_{hour:02d}"
             env_id = self.find_environment_by_name(env_name)
             
             if env_id:

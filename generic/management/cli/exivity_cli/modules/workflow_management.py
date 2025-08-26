@@ -671,7 +671,7 @@ class WorkflowManager:
         print(f"🔄 Duplicating {len(steps)} step(s) across 24 environments...")
         
         for hour in range(24):
-            env_name = f"H{hour:02d}"
+            env_name = f"hour_{hour:02d}"
             
             # Check if environment exists
             if env_name not in env_map:
@@ -744,9 +744,9 @@ class WorkflowManager:
         self.api.list_hourly_environments()
 
     def recreate_missing_environments(self):
-        """Recreate any missing H00-H23 environments"""
+        """Recreate any missing hour_00-hour_23 environments"""
         confirm = questionary.confirm(
-            "This will create any missing H00-H23 environments. Continue?",
+            "This will create any missing hour_00-hour_23 environments. Continue?",
             default=True
         ).ask()
         
@@ -770,7 +770,7 @@ class WorkflowManager:
             print("💡 Note: The default environment will be protected from deletion")
         
         confirm = questionary.confirm(
-            "⚠️  WARNING: This will delete ALL non-default environments named H00 through H23. Are you sure?",
+            "⚠️  WARNING: This will delete ALL non-default environments named hour_00 through hour_23. Are you sure?",
             default=False
         ).ask()
         
@@ -794,7 +794,7 @@ class WorkflowManager:
             # Check if any environments still exist and provide guidance
             remaining_envs = []
             for hour in range(24):
-                env_name = f"H{hour:02d}"
+                env_name = f"hour_{hour:02d}"
                 if self.api.find_environment_by_name(env_name):
                     remaining_envs.append(env_name)
             
@@ -834,7 +834,7 @@ class WorkflowManager:
                     "📄 List all workflows",
                     "📋 List hourly environments status",
                     "🔧 Recreate missing hourly environments",
-                    "🗑️  Delete hourly environments (H00-H23)",
+                    "🗑️  Delete hourly environments (hour_00-hour_23)",
                     "🐛 Debug environment creation",
                     "🔍 Debug dump endpoint",
                     "🔙 Back to main menu"
@@ -851,7 +851,7 @@ class WorkflowManager:
                 self.list_hourly_environments_status()
             elif action == "🔧 Recreate missing hourly environments":
                 self.recreate_missing_environments()
-            elif action == "🗑️  Delete hourly environments (H00-H23)":
+            elif action == "🗑️  Delete hourly environments (hour_00-hour_23)":
                 self.delete_hourly_environments_interactive()
             elif action == "🐛 Debug environment creation":
                 self.debug_environment_creation()

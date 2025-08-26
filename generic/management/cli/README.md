@@ -6,7 +6,7 @@ A comprehensive command-line interface for managing Exivity operations including
 
 - **Rate Management**: Import, validate, and index rates with CSV support
 - **Workflow Management**: Create workflows with 24-hour environment duplication
-- **Environment Management**: Manage hourly environments (H00-H23)
+- **Environment Management**: Manage hourly environments (hour_00-hour_23)
 - **Interactive Menus**: User-friendly questionary-based navigation
 - **Batch Operations**: Efficient bulk processing with atomic operations
 - **Data Validation**: Comprehensive validation against system data
@@ -170,18 +170,18 @@ Result: 48 total steps (2 × 24 environments)
 #### Environment Management
 
 **Hourly Environments Status**:
-View status of H00-H23 environments:
+View status of hour_00-hour_23 environments:
 - ✅ Existing environments with IDs
 - ❌ Missing environments
 - 🏠 Default environment identification
 
 **Recreate Missing Environments**:
-- Automatically creates missing H00-H23 environments
+- Automatically creates missing hour_00-hour_23 environments
 - Adds hour variables (hour=00, hour=01, etc.)
 - Protects existing environments
 
 **Delete Hourly Environments**:
-- ⚠️ **CAUTION**: Deletes all H00-H23 environments
+- ⚠️ **CAUTION**: Deletes all hour_00-hour_23 environments
 - 🛡️ **Protection**: Default environment cannot be deleted
 - Requires double confirmation for safety
 

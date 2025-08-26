@@ -278,10 +278,10 @@ class ExivityCLI:
             choice = questionary.select(
                 "Choose an hourly environment operation:",
                 choices=[
-                    questionary.Choice("📊 Show H00-H23 status", "show_hourly_status"),
-                    questionary.Choice("🔧 Create missing H00-H23", "create_missing_hourly"),
-                    questionary.Choice("🗑️  Delete H00-H23 environments", "delete_hourly"),
-                    questionary.Choice("🔄 Recreate all H00-H23", "recreate_hourly"),
+                    questionary.Choice("📊 Show hour_00-hour_23 status", "show_hourly_status"),
+                    questionary.Choice("🔧 Create missing hour_00-hour_23", "create_missing_hourly"),
+                    questionary.Choice("🗑️  Delete hour_00-hour_23 environments", "delete_hourly"),
+                    questionary.Choice("🔄 Recreate all hour_00-hour_23", "recreate_hourly"),
                     questionary.Choice("⬅️  Back to environment management", "back")
                 ]
             ).ask()
