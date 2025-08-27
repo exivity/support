@@ -261,15 +261,63 @@ class WorkflowManager:
             resp = self.api._request("GET", f"/v2/workflows/{workflow_id}")
             workflow_data = resp.json().get("data", {})
             
-            # Get workflow steps
-            steps_resp = self.api._request("GET", f"/v2/workflows/{workflow_id}/steps")
-            steps_data = steps_resp.json().get("data", [])
+            # Get ALL workflow steps with pagination support
+            all_steps = []
+            
+            # Try different pagination approaches
+            try:
+                # Approach 1: Try page[limit] = -1 (get all at once)
+                params = {"page[limit]": -1}
+                steps_resp = self.api._request("GET", f"/v2/workflows/{workflow_id}/steps", params=params)
+                all_steps = steps_resp.json().get("data", [])
+                print(f"📊 Fetched {len(all_steps)} total steps using page[limit]=-1")
+                
+            except Exception as e1:
+                print(f"⚠️  page[limit]=-1 failed: {e1}, trying pagination...")
+                
+                # Approach 2: Manual pagination with page[size] and page[offset]
+                try:
+                    page_size = 100  # Request larger page size
+                    offset = 0
+                    
+                    while True:
+                        params = {
+                            "page[size]": page_size,
+                            "page[offset]": offset
+                        }
+                        steps_resp = self.api._request("GET", f"/v2/workflows/{workflow_id}/steps", params=params)
+                        steps_data = steps_resp.json().get("data", [])
+                        
+                        if not steps_data:
+                            break
+                            
+                        all_steps.extend(steps_data)
+                        
+                        if len(steps_data) < page_size:
+                            break
+                            
+                        offset += page_size
+                    
+                    print(f"📊 Fetched {len(all_steps)} total steps using pagination")
+                    
+                except Exception as e2:
+                    print(f"⚠️  Pagination failed: {e2}, trying without parameters...")
+                    
+                    # Approach 3: No parameters (default, might be limited)
+                    try:
+                        steps_resp = self.api._request("GET", f"/v2/workflows/{workflow_id}/steps")
+                        all_steps = steps_resp.json().get("data", [])
+                        print(f"⚠️  Fetched {len(all_steps)} steps (might be limited to first page)")
+                        
+                    except Exception as e3:
+                        print(f"❌ All approaches failed: {e3}")
+                        return None
             
             workflow_details = {
                 'id': workflow_data.get('id'),
                 'name': workflow_data.get('attributes', {}).get('name', ''),
                 'description': workflow_data.get('attributes', {}).get('description', ''),
-                'steps': self._parse_workflow_steps(steps_data)
+                'steps': self._parse_workflow_steps(all_steps)
             }
             
             return workflow_details
@@ -686,6 +734,8 @@ class WorkflowManager:
                 # Add environment_id for extract/transform steps
                 if clone["type"] in ("extract", "transform"):
                     clone["attributes"]["environment_id"] = int(env_id)
+                    if hour < 2 and step_index == 0:  # Only log first step of first 2 hours
+                        print(f"   {env_name}: Step {step_index + 1} ({clone['type']}) -> environment_id = {env_id}")
                 
                 # Validate step attributes
                 if not self._validate_step_attributes(clone, hour, step_index):
