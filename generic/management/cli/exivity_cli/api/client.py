@@ -418,6 +418,8 @@ class ExivityAPI:
         """Create workflow with all steps using atomic operations matching GUI format exactly"""
         operations = []
         
+        print(f"🔧 Creating workflow '{name}' with {len(steps)} steps")
+        
         # Create workflow operation with steps and schedules relationships
         workflow_lid = str(uuid.uuid4())
         operations.append({
@@ -484,10 +486,13 @@ class ExivityAPI:
                 if step_attrs.get("arguments"):
                     step_data["attributes"]["options"]["arguments"] = step_attrs["arguments"]
                 
-                # Only add environment_id if it's not the default environment (1)
-                # GUI doesn't include environment_id for default environment
-                if step_attrs.get("environment_id") and step_attrs.get("environment_id") != 1:
-                    step_data["attributes"]["options"]["environment_id"] = step_attrs["environment_id"]
+                # Always include environment_id if provided (don't exclude based on ID value)
+                # The GUI exclusion logic was causing issues with hourly workflows
+                if step_attrs.get("environment_id") is not None:
+                    env_id = step_attrs["environment_id"]
+                    step_data["attributes"]["options"]["environment_id"] = env_id
+                    if i < 3:  # Only log first 3 steps to avoid spam
+                        print(f"   Step {i+1} ({step_type}): Setting environment_id = {env_id}")
                     
             elif step_type == "transform":
                 step_data["attributes"]["options"] = {
@@ -496,10 +501,13 @@ class ExivityAPI:
                     "to_date_offset": step_attrs.get("to_date_offset", 0)
                 }
                 
-                # Only add environment_id if it's not the default environment (1)
-                # GUI doesn't include environment_id for default environment
-                if step_attrs.get("environment_id") and step_attrs.get("environment_id") != 1:
-                    step_data["attributes"]["options"]["environment_id"] = step_attrs["environment_id"]
+                # Always include environment_id if provided (don't exclude based on ID value)
+                # The GUI exclusion logic was causing issues with hourly workflows
+                if step_attrs.get("environment_id") is not None:
+                    env_id = step_attrs["environment_id"]
+                    step_data["attributes"]["options"]["environment_id"] = env_id
+                    if i < 3:  # Only log first 3 steps to avoid spam
+                        print(f"   Step {i+1} ({step_type}): Setting environment_id = {env_id}")
                     
             elif step_type == "prepare_report":
                 step_data["attributes"]["options"] = {
