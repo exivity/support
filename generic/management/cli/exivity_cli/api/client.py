@@ -15,11 +15,12 @@ class ExivityAPI:
     """Main API client for Exivity"""
     
     def __init__(self, base_url: str, username: str = None, password: str = None, 
-                 token: str = None, verify_ssl: bool = True):
+                 token: str = None, verify_ssl: bool = True, config=None):
         self.base_url = base_url.rstrip('/')
         self.session = requests.Session()
         self.verify_ssl = verify_ssl
         self.token = token
+        self.config = config  # Store configuration reference
         
         # Configure SSL verification
         if not verify_ssl:
@@ -695,10 +696,19 @@ class ExivityAPI:
         return env_id
 
     def ensure_hourly_environments(self) -> Dict[str, str]:
-        """Ensure all 24 hourly environments (hour_00-hour_23) exist, return name->id map"""
+        """Ensure all configured environments exist, return name->id map"""
         env_map = {}
         
-        print("🔍 Checking hourly environments...")
+        # Get configuration
+        if self.config:
+            env_names = self.config.get_environment_names()
+            env_count = self.config.get_environment_count()
+        else:
+            # Fallback to hardcoded values if no config
+            env_count = 24
+            env_names = [f"hour_{hour:02d}" for hour in range(env_count)]
+        
+        print(f"🔍 Checking {env_count} configured environments...")
         
         # First, check what environments already exist
         default_env = self.get_default_environment()
@@ -708,8 +718,7 @@ class ExivityAPI:
         else:
             print("   ⚠️  No default environment found")
         
-        for hour in range(24):
-            env_name = f"hour_{hour:02d}"
+        for i, env_name in enumerate(env_names):
             env_id = self.find_environment_by_name(env_name)
             
             if env_id:
@@ -718,9 +727,12 @@ class ExivityAPI:
             else:
                 print(f"   ➕ Creating environment {env_name}...")
                 try:
-                    # Create environment with hour variable (don't pass description since it's not supported)
-                    hour_value = f"{hour:02d}"
-                    variables = {"hour": hour_value}
+                    # Get variables for this environment from configuration
+                    if self.config:
+                        variables = self.config.get_environment_variables(i)
+                    else:
+                        # Fallback to hardcoded variable
+                        variables = {"hour": f"{i:02d}"}
                     
                     env_id = self.create_environment_with_variables(
                         env_name, 
@@ -728,7 +740,8 @@ class ExivityAPI:
                     )
                     env_map[env_name] = env_id
                     
-                    print(f"   ✅ Created environment {env_name} (ID: {env_id}) with hour variable = {hour_value}")
+                    var_info = ", ".join([f"{k}={v}" for k, v in variables.items()])
+                    print(f"   ✅ Created environment {env_name} (ID: {env_id}) with variables: {var_info}")
                     
                 except Exception as e:
                     print(f"   ❌ Failed to create environment {env_name}: {e}")
@@ -736,16 +749,22 @@ class ExivityAPI:
                     # Try a simpler approach without variables for this environment
                     print(f"   🔄 Trying to create {env_name} without variables...")
                     try:
-                        env_id = self.create_environment(env_name)  # No description
+                        env_id = self.create_environment(env_name)
                         env_map[env_name] = env_id
                         print(f"   ✅ Created environment {env_name} (ID: {env_id}) without variables")
                         
-                        # Now try to add the hour variable separately
-                        try:
-                            self.create_environment_variable(env_id, "hour", hour_value)
-                            print(f"   ✅ Added hour variable = {hour_value} to {env_name}")
-                        except Exception as var_e:
-                            print(f"   ⚠️  Could not add hour variable to {env_name}: {var_e}")
+                        # Now try to add variables separately
+                        if self.config:
+                            variables = self.config.get_environment_variables(i)
+                        else:
+                            variables = {"hour": f"{i:02d}"}
+                            
+                        for var_name, var_value in variables.items():
+                            try:
+                                self.create_environment_variable(env_id, var_name, var_value)
+                                print(f"   ✅ Added variable {var_name} = {var_value} to {env_name}")
+                            except Exception as var_e:
+                                print(f"   ⚠️  Could not add variable {var_name} to {env_name}: {var_e}")
                             
                     except Exception as e2:
                         print(f"   ❌ Even simple creation failed for {env_name}: {e2}")
@@ -770,7 +789,7 @@ class ExivityAPI:
                 raise Exception(f"Failed to delete environment: {e}")
 
     def delete_hourly_environments(self):
-        """Delete all hourly environments hour_00-hour_23, but protect the default environment"""
+        """Delete all configured environments, but protect the default environment"""
         print("🗑️  Deleting hourly environments...")
         print("💡 Note: Default environment will be protected from deletion")
         
@@ -784,9 +803,15 @@ class ExivityAPI:
             default_env_name = default_env.get('attributes', {}).get('name')
             print(f"   🛡️  Protected default environment: {default_env_name} (ID: {default_env.get('id')})")
         
-        # Try to delete all hourly environments, but respect default protection
-        for hour in range(24):
-            env_name = f"hour_{hour:02d}"
+        # Get environment configuration
+        if self.config:
+            env_names = self.config.get_environment_names()
+        else:
+            # Fallback to hardcoded values
+            env_names = [f"hour_{hour:02d}" for hour in range(24)]
+        
+        # Try to delete all configured environments, but respect default protection
+        for env_name in env_names:
             env_id = self.find_environment_by_name(env_name)
             
             if env_id:
@@ -817,14 +842,20 @@ class ExivityAPI:
             print(f"💡 The default environment cannot be deleted to maintain system integrity")
 
     def list_hourly_environments(self):
-        """List status of all hourly environments hour_00-hour_23"""
-        print("📋 Hourly Environments Status:")
+        """List status of all configured environments"""
+        print("📋 Configured Environments Status:")
         
         existing_count = 0
         missing_count = 0
         
-        for hour in range(24):
-            env_name = f"hour_{hour:02d}"
+        # Get environment configuration
+        if self.config:
+            env_names = self.config.get_environment_names()
+        else:
+            # Fallback to hardcoded values
+            env_names = [f"hour_{hour:02d}" for hour in range(24)]
+        
+        for env_name in env_names:
             env_id = self.find_environment_by_name(env_name)
             
             if env_id:

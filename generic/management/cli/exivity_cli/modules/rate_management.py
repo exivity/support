@@ -19,10 +19,16 @@ import questionary
 class RateManager:
     """Handles rate management operations"""
     
-    def __init__(self, api):
+    def __init__(self, api, config=None):
         self.api = api
-        # Set default CSV folder relative to CLI root
-        self.default_csv_folder = Path(__file__).parent.parent.parent / "csv"
+        self.config = config
+        
+        # Set default CSV folder - use config if available, otherwise fallback to hardcoded path
+        if config:
+            self.default_csv_folder = Path(config.get('rate.csv_folder', './csv'))
+        else:
+            # Fallback to hardcoded path relative to CLI root
+            self.default_csv_folder = Path(__file__).parent.parent.parent / "csv"
     
     def get_csv_files(self, folder_path: str = None) -> List[str]:
         """Get list of CSV files from specified folder or default csv folder"""

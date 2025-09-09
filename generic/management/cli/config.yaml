@@ -1,0 +1,84 @@
+# Exivity CLI Configuration
+# This file contains default settings that can be overridden
+
+# Connection settings
+connection:
+  hostname: "localhost"  # Default hostname
+  port: 443  # Default HTTPS port
+  username: ""  # Leave empty to prompt
+  password: ""  # Leave empty to prompt
+  token: ""     # Alternative to username/password
+  verify_ssl: false  # Set to true for production with valid certificates
+  protocol: "https"  # http or https
+
+# Environment management settings
+environments:
+  # Number of environments to create/manage
+  count: 24
+  
+  # Naming convention for environments
+  naming:
+    prefix: "hour_"  # Prefix for environment names
+    suffix_format: "{:02d}"  # Format string for suffix (e.g., 00, 01, 02...)
+    # Examples of other formats:
+    # suffix_format: "{}"      # Would give: hour_0, hour_1, hour_2...
+    # suffix_format: "_{}"     # Would give: hour__0, hour__1, hour__2...
+  
+  # Variables to create in each environment
+  variables:
+    - name: "hour"  # Variable name
+      value_format: "{:02d}"  # Format for the value (same number as environment)
+      encrypted: false  # Whether the variable should be encrypted
+  
+  # You can add more variables if needed:
+  # - name: "region"
+  #   value_format: "region_{}"
+  #   encrypted: false
+
+# Workflow settings
+workflows:
+  # Default date offsets for workflow steps
+  default_from_offset: 0
+  default_to_offset: 0
+  
+  # Default timeout for workflow steps (seconds)
+  default_timeout: 3600
+  
+  # Default wait setting for workflow steps
+  default_wait: true
+
+# Rate management settings
+rates:
+  # Default values for rate creation
+  default_cogs: 0.0
+  default_rate: 0.0
+  
+  # CSV export settings
+  csv_export:
+    include_service_names: true
+    date_format: "YYYYMMDD"  # or "YYYY-MM-DD"
+
+# API settings
+api:
+  # Request timeout (seconds)
+  timeout: 30
+  
+  # Retry settings
+  max_retries: 3
+  retry_delay: 1
+  
+  # Pagination settings
+  default_page_size: 100
+  max_page_size: 1000
+
+# Logging settings
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  show_debug_output: false
+  show_api_requests: false
+
+# File paths (relative to CLI directory)
+paths:
+  csv_directory: "csv"
+  logs_directory: "logs"
+  environments_directory: "environments"

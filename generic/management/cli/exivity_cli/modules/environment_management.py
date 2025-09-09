@@ -11,8 +11,9 @@ import questionary
 class EnvironmentManager:
     """Handles environment management operations"""
     
-    def __init__(self, api):
+    def __init__(self, api, config=None):
         self.api = api
+        self.config = config
     
     def list_environments(self):
         """List all environments"""

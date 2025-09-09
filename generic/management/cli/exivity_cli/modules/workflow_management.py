@@ -17,17 +17,27 @@ import questionary
 class WorkflowManager:
     """Handles workflow management operations"""
     
-    def __init__(self, api):
+    def __init__(self, api, config=None):
         self.api = api
-        self.workflows_folder = Path(__file__).parent.parent.parent / "workflows"
-        self.environments_folder = Path(__file__).parent.parent.parent / "environments"
+        self.config = config
+        
+        # Set folder paths - use config if available, otherwise fallback to hardcoded paths
+        if config:
+            workflows_path = config.get('workflow.workflows_folder', './workflows')
+            environments_path = config.get('workflow.environments_folder', './environments')
+            self.workflows_folder = Path(workflows_path)
+            self.environments_folder = Path(environments_path)
+        else:
+            # Fallback to hardcoded paths relative to CLI root
+            self.workflows_folder = Path(__file__).parent.parent.parent / "workflows"
+            self.environments_folder = Path(__file__).parent.parent.parent / "environments"
         
         # Ensure folders exist
         self.workflows_folder.mkdir(parents=True, exist_ok=True)
         self.environments_folder.mkdir(parents=True, exist_ok=True)
 
     def create_hourly_workflow_interactive(self):
-        """Create workflow with 24-hour environment duplication"""
+        """Create workflow with configurable environment duplication"""
         name = questionary.text("Workflow name:").ask()
         if not name:
             print("❌ Workflow name is required")
@@ -55,16 +65,22 @@ class WorkflowManager:
             print("No steps defined, aborting")
             return
         
-        # Ensure hourly environments exist
+        # Ensure configured environments exist
         env_map = self.api.ensure_hourly_environments()
         
-        # Duplicate steps for all 24 hours
+        # Get environment configuration
+        if self.config:
+            env_count = self.config.get_environment_count()
+        else:
+            env_count = 24  # Fallback
+        
+        # Duplicate steps for all configured environments
         all_steps = self._duplicate_steps_hourly(steps, env_map)
         
         # Create workflow with all steps using atomic operations
         try:
             workflow_id = self.api.create_workflow_with_steps(name, description, all_steps)
-            print(f"✅ Workflow '{name}' ({workflow_id}) created with {len(all_steps)} steps across 24 hourly environments.")
+            print(f"✅ Workflow '{name}' ({workflow_id}) created with {len(all_steps)} steps across {env_count} environments.")
             print(f"Using offsets: from={from_offset}, to={to_offset}")
         except Exception as e:
             print(f"❌ Error creating workflow: {e}")
@@ -193,7 +209,12 @@ class WorkflowManager:
                         if steps:
                             hourly_steps = self._analyze_hourly_pattern(steps)
                             if hourly_steps:
-                                print(f"     Type: Hourly workflow ({len(hourly_steps)} unique × 24 environments)")
+                                # Get environment count for display
+                                if self.config:
+                                    env_count = self.config.get_environment_count()
+                                else:
+                                    env_count = 24
+                                print(f"     Type: Hourly workflow ({len(hourly_steps)} unique × {env_count} environments)")
                             else:
                                 print(f"     Type: Standard workflow")
                 except:
@@ -691,19 +712,25 @@ class WorkflowManager:
                 step_groups[signature] = []
             step_groups[signature].append(step)
         
-        # Check if we have exactly 24 instances of each unique step (hourly pattern)
+        # Get expected environment count for pattern detection
+        if self.config:
+            expected_env_count = self.config.get_environment_count()
+        else:
+            expected_env_count = 24  # Fallback
+        
+        # Check if we have exactly the expected number of instances of each unique step (hourly pattern)
         unique_steps = []
         is_hourly = True
         
         for signature, group in step_groups.items():
-            if len(group) == 24:
+            if len(group) == expected_env_count:
                 # Take the first instance as the template
                 unique_steps.append(group[0])
             elif len(group) == 1:
                 # Single step - could be prepare_report or non-environment step
                 unique_steps.append(group[0])
             else:
-                # Not a clean 24-hour pattern
+                # Not a clean environmental pattern
                 is_hourly = False
                 break
         
@@ -716,11 +743,9 @@ class WorkflowManager:
         """Duplicate steps for each hourly environment with validation"""
         duplicated = []
         
-        print(f"🔄 Duplicating {len(steps)} step(s) across 24 environments...")
+        print(f"🔄 Duplicating {len(steps)} step(s) across {len(env_map)} environments...")
         
-        for hour in range(24):
-            env_name = f"hour_{hour:02d}"
-            
+        for i, env_name in enumerate(env_map.keys()):
             # Check if environment exists
             if env_name not in env_map:
                 print(f"Warning: Environment {env_name} not found, skipping...")
@@ -734,11 +759,11 @@ class WorkflowManager:
                 # Add environment_id for extract/transform steps
                 if clone["type"] in ("extract", "transform"):
                     clone["attributes"]["environment_id"] = int(env_id)
-                    if hour < 2 and step_index == 0:  # Only log first step of first 2 hours
+                    if i < 2 and step_index == 0:  # Only log first step of first 2 environments
                         print(f"   {env_name}: Step {step_index + 1} ({clone['type']}) -> environment_id = {env_id}")
                 
                 # Validate step attributes
-                if not self._validate_step_attributes(clone, hour, step_index):
+                if not self._validate_step_attributes(clone, i, step_index):
                     print(f"⚠️  Warning: Step validation failed for {env_name}, step {step_index + 1}")
                 
                 duplicated.append(clone)
@@ -746,7 +771,7 @@ class WorkflowManager:
         print(f"✅ Created {len(duplicated)} total steps")
         return duplicated
 
-    def _validate_step_attributes(self, step: Dict, hour: int, step_index: int) -> bool:
+    def _validate_step_attributes(self, step: Dict, env_index: int, step_index: int) -> bool:
         """Validate step attributes before creation"""
         step_type = step.get("type")
         attributes = step.get("attributes", {})
@@ -794,9 +819,18 @@ class WorkflowManager:
         self.api.list_hourly_environments()
 
     def recreate_missing_environments(self):
-        """Recreate any missing hour_00-hour_23 environments"""
+        """Recreate any missing configured environments"""
+        # Get environment configuration
+        if self.config:
+            env_count = self.config.get_environment_count()
+            env_names = self.config.get_environment_names()
+            env_range_desc = f"{env_names[0]}-{env_names[-1]}"
+        else:
+            env_count = 24
+            env_range_desc = "hour_00-hour_23"
+        
         confirm = questionary.confirm(
-            "This will create any missing hour_00-hour_23 environments. Continue?",
+            f"This will create any missing {env_range_desc} environments. Continue?",
             default=True
         ).ask()
         
@@ -806,12 +840,19 @@ class WorkflowManager:
         
         try:
             env_map = self.api.ensure_hourly_environments()
-            print(f"✅ Successfully ensured all 24 hourly environments exist.")
+            print(f"✅ Successfully ensured all {env_count} configured environments exist.")
         except Exception as e:
             print(f"❌ Error ensuring environments: {e}")
 
     def delete_hourly_environments_interactive(self):
-        """Interactive deletion of hourly environments with confirmation"""
+        """Interactive deletion of configured environments with confirmation"""
+        # Get environment configuration
+        if self.config:
+            env_names = self.config.get_environment_names()
+            env_range_desc = f"{env_names[0]} through {env_names[-1]}"
+        else:
+            env_range_desc = "hour_00 through hour_23"
+        
         # Show current default environment info
         default_env = self.api.get_default_environment()
         if default_env:
@@ -820,7 +861,7 @@ class WorkflowManager:
             print("💡 Note: The default environment will be protected from deletion")
         
         confirm = questionary.confirm(
-            "⚠️  WARNING: This will delete ALL non-default environments named hour_00 through hour_23. Are you sure?",
+            f"⚠️  WARNING: This will delete ALL non-default environments named {env_range_desc}. Are you sure?",
             default=False
         ).ask()
         
@@ -843,8 +884,12 @@ class WorkflowManager:
             
             # Check if any environments still exist and provide guidance
             remaining_envs = []
-            for hour in range(24):
-                env_name = f"hour_{hour:02d}"
+            if self.config:
+                env_names = self.config.get_environment_names()
+            else:
+                env_names = [f"hour_{hour:02d}" for hour in range(24)]
+                
+            for env_name in env_names:
                 if self.api.find_environment_by_name(env_name):
                     remaining_envs.append(env_name)
             
@@ -876,22 +921,31 @@ class WorkflowManager:
     def workflow_management_menu(self):
         """Enhanced workflow management menu with duplication"""
         while True:
+            # Get environment configuration for menu descriptions
+            if self.config:
+                env_count = self.config.get_environment_count()
+                env_names = self.config.get_environment_names()
+                env_range_desc = f"{env_names[0]}-{env_names[-1]}"
+            else:
+                env_count = 24
+                env_range_desc = "hour_00-hour_23"
+            
             action = questionary.select(
                 "Choose a workflow management operation:",
                 choices=[
-                    "🆕 Create hourly workflow (24 environments)",
+                    f"🆕 Create hourly workflow ({env_count} environments)",
                     "📋 Duplicate existing workflow",
                     "📄 List all workflows",
                     "📋 List hourly environments status",
                     "🔧 Recreate missing hourly environments",
-                    "🗑️  Delete hourly environments (hour_00-hour_23)",
+                    f"🗑️  Delete hourly environments ({env_range_desc})",
                     "🐛 Debug environment creation",
                     "🔍 Debug dump endpoint",
                     "🔙 Back to main menu"
                 ]
             ).ask()
             
-            if action == "🆕 Create hourly workflow (24 environments)":
+            if action.startswith("🆕 Create hourly workflow"):
                 self.create_hourly_workflow_interactive()
             elif action == "📋 Duplicate existing workflow":
                 self.duplicate_workflow_interactive()
@@ -901,7 +955,7 @@ class WorkflowManager:
                 self.list_hourly_environments_status()
             elif action == "🔧 Recreate missing hourly environments":
                 self.recreate_missing_environments()
-            elif action == "🗑️  Delete hourly environments (hour_00-hour_23)":
+            elif action.startswith("🗑️  Delete hourly environments"):
                 self.delete_hourly_environments_interactive()
             elif action == "🐛 Debug environment creation":
                 self.debug_environment_creation()

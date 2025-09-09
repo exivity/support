@@ -14,6 +14,7 @@ setup(
         "requests>=2.25.0",
         "questionary>=1.10.0",
         "urllib3>=1.26.0",
+        "PyYAML>=6.0",
     ],
     entry_points={
         "console_scripts": [
