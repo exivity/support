@@ -33,8 +33,8 @@ The tool supports both `service_id` and `service_key` for easier rate management
 
 ```csv
 account_id,service_id,service_key,rate,cogs,revision_start_date
-3726,,C3i|CPU|D,0.00542937240000,0,20251001
-3727,182,,0.020691400797809,0,20251001
+1001,,compute.vm.small,25.50,18.00,20250101
+1002,42,,15.75,12.50,20250101
 ```
 
 ### Required Columns
