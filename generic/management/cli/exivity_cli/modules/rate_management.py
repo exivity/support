@@ -427,6 +427,72 @@ class RateManager:
         if scope == "back":
             return
         
+        # Ask about service category filtering
+        filter_by_category = questionary.confirm(
+            "Filter by service categories?",
+            default=False
+        ).ask()
+        
+        selected_categories = None
+        if filter_by_category:
+            # Load dump data to get available categories
+            print("📊 Loading service categories...")
+            try:
+                dump_data = self.api.fetch_dump_data()
+                
+                # Debug: Show what's in dump data
+                services = dump_data.get('service', [])
+                print(f"🔍 Found {len(services)} services in dump data")
+                
+                # Sample a service to see its structure
+                if services and len(services) > 0:
+                    sample_service = services[0]
+                    print(f"🔍 Sample service keys: {list(sample_service.keys())}")
+                    if 'attributes' in sample_service:
+                        attrs = sample_service['attributes']
+                        print(f"🔍 Sample attributes: {list(attrs.keys())}")
+                        # Check if category exists
+                        if 'category' in attrs:
+                            print(f"🔍 Sample category value: '{attrs.get('category', 'N/A')}'")
+                    else:
+                        # Direct format
+                        if 'category' in sample_service:
+                            print(f"🔍 Sample category value (direct): '{sample_service.get('category', 'N/A')}'")
+                
+                available_categories = self._get_service_categories(dump_data)
+                
+                if not available_categories:
+                    print("⚠️  No service categories found in any services")
+                    print("💡 This could mean:")
+                    print("   • Services don't have the 'category' field populated")
+                    print("   • Your Exivity version doesn't support service categories")
+                    print("   • Categories need to be configured in the Exivity UI")
+                    print("💡 Proceeding without category filtering - all services will be included")
+                else:
+                    print(f"✅ Found {len(available_categories)} service categories")
+                    
+                    # Let user select categories
+                    category_choices = [
+                        questionary.Choice(f"  {cat} ({count} services)", cat)
+                        for cat, count in sorted(available_categories.items())
+                    ]
+                    
+                    selected_categories = questionary.checkbox(
+                        "Select service categories to include (use spacebar to select, enter to confirm):",
+                        choices=category_choices
+                    ).ask()
+                    
+                    if not selected_categories:
+                        print("⚠️  No categories selected, proceeding without filtering")
+                        selected_categories = None
+                    else:
+                        print(f"✅ Selected {len(selected_categories)} categories: {', '.join(selected_categories)}")
+            
+            except Exception as e:
+                print(f"❌ Error loading service categories: {e}")
+                print("💡 Proceeding without category filtering")
+                selected_categories = None
+        
         # Get indexation parameters
         percentage = questionary.text(
             "Percentage change (e.g., 5 for +5%, -3 for -3%):",
@@ -485,6 +551,10 @@ class RateManager:
         print(f"   • Scope: {scope_text}")
         print(f"   • Change: {change_text}")
         print(f"   • New effective date: {display_date}")
+        if selected_categories:
+            print(f"   • Service categories: {', '.join(selected_categories)}")
+        else:
+            print(f"   • Service categories: All categories")
         
         confirm = questionary.confirm(
             "Proceed with rate indexation?",
@@ -498,11 +568,11 @@ class RateManager:
         # Execute indexation
         try:
             if scope == "global":
-                self._perform_global_indexation(percentage_value, formatted_date, display_date)
+                self._perform_global_indexation(percentage_value, formatted_date, display_date, selected_categories)
             elif scope == "account":
-                self._perform_account_indexation(target_account_id, percentage_value, formatted_date, display_date)
+                self._perform_account_indexation(target_account_id, percentage_value, formatted_date, display_date, selected_categories)
             elif scope == "list_prices":
-                self._perform_list_price_indexation(percentage_value, formatted_date, display_date)
+                self._perform_list_price_indexation(percentage_value, formatted_date, display_date, selected_categories)
         except Exception as e:
             print(f"❌ Error during indexation: {e}")
 
@@ -966,6 +1036,113 @@ class RateManager:
         
         return "Please use YYYYMMDD or YYYY-MM-DD format"
 
+    def _get_service_categories(self, dump_data: Dict) -> Dict[str, int]:
+        """Get available service categories with counts
+        
+        Service categories are stored in the 'servicecategory' model,
+        and services reference them via 'category_id' field.
+        """
+        # First, build a map of category_id -> category name
+        category_map = {}
+        servicecategories = dump_data.get('servicecategory', [])
+        
+        if not servicecategories:
+            print(f"⚠️  No service categories found in dump data")
+            return {}
+        
+        for cat in servicecategories:
+            # Handle both dump format and JSON:API format
+            cat_id = cat.get('id', '')
+            cat_name = cat.get('name', '')
+            
+            if not cat_id or not cat_name:
+                # Try JSON:API format
+                if 'id' in cat:
+                    cat_id = cat['id']
+                if 'attributes' in cat:
+                    cat_name = cat['attributes'].get('name', '')
+            
+            if cat_id and cat_name:
+                category_map[str(cat_id)] = cat_name
+        
+        print(f"✓ Found {len(category_map)} service categories: {', '.join(category_map.values())}")
+        
+        # Now count how many services belong to each category
+        categories = {name: 0 for name in category_map.values()}
+        services = dump_data.get('service', [])
+        
+        if not services:
+            print(f"⚠️  No services found in dump data")
+            return categories
+        
+        for service in services:
+            # Get the category_id from the service (note: it's 'category_id', not 'servicecategory_id')
+            category_id = service.get('category_id', '')
+            if not category_id and 'attributes' in service:
+                category_id = service['attributes'].get('category_id', '')
+            
+            # Look up the category name
+            if category_id and str(category_id) in category_map:
+                category_name = category_map[str(category_id)]
+                categories[category_name] += 1
+        
+        # Remove categories with no services
+        categories = {k: v for k, v in categories.items() if v > 0}
+        
+        return categories
+
+    def _get_services_by_category(self, dump_data: Dict, categories: List[str]) -> set:
+        """Get service IDs that belong to the specified categories
+        
+        Args:
+            dump_data: The dump data containing services and servicecategories
+            categories: List of category names to filter by
+        
+        Returns:
+            Set of service IDs (as strings) that belong to the specified categories
+        """
+        if not categories:
+            return None  # None means no filtering
+        
+        # First, build a map of category name -> category_id
+        category_id_map = {}
+        servicecategories = dump_data.get('servicecategory', [])
+        
+        for cat in servicecategories:
+            cat_id = cat.get('id', '')
+            cat_name = cat.get('name', '')
+            
+            # Handle JSON:API format
+            if not cat_id and 'id' in cat:
+                cat_id = cat['id']
+            if not cat_name and 'attributes' in cat:
+                cat_name = cat['attributes'].get('name', '')
+            
+            if cat_name in categories:
+                category_id_map[str(cat_id)] = cat_name
+        
+        # Now find all services that have a category_id matching our selected categories
+        allowed_services = set()
+        services = dump_data.get('service', [])
+        
+        for service in services:
+            service_id = service.get('id', '')
+            category_id = service.get('category_id', '')
+            
+            # Handle JSON:API format
+            if 'attributes' in service:
+                attrs = service['attributes']
+                if not category_id:
+                    category_id = attrs.get('category_id', '')
+                if not service_id:
+                    service_id = attrs.get('id', '')
+            
+            # Check if this service belongs to one of our selected categories
+            if str(category_id) in category_id_map:
+                allowed_services.add(str(service_id))
+        
+        return allowed_services
+
     def _get_services_with_rate_tiers(self, dump_data: Dict) -> set:
         """Get set of service IDs that have rate tiers configured"""
         services_with_tiers = set()
@@ -1096,7 +1273,7 @@ class RateManager:
         success_rate = (created_count / total_attempted * 100) if total_attempted > 0 else 0
         print(f"   📈 Success rate: {success_rate:.1f}%")
 
-    def _perform_global_indexation(self, percentage: float, formatted_date: str, display_date: str):
+    def _perform_global_indexation(self, percentage: float, formatted_date: str, display_date: str, categories: List[str] = None):
         """Perform rate indexation for all accounts"""
         print(f"🌐 Starting indexation for all accounts ({percentage:+.2f}%)...")
         
@@ -1116,6 +1293,16 @@ class RateManager:
         if services_with_tiers:
             print(f"⚠️  Found {len(services_with_tiers)} service(s) with rate tiers - these will be skipped")
         
+        # Get services to include based on category filter
+        allowed_services = None
+        if categories:
+            allowed_services = self._get_services_by_category(dump_data, categories)
+            if allowed_services:
+                print(f"🔍 Category filter: {len(allowed_services)} services in selected categories")
+            else:
+                print(f"⚠️  No services found in selected categories")
+                return
+        
         # Group rates by account/service to get latest rates
         latest_rates = self._get_latest_rates_by_account_service(existing_rates)
         
@@ -1126,12 +1313,18 @@ class RateManager:
         skipped_invalid = 0
         skipped_existing = 0
         skipped_tiers = 0
+        skipped_category = 0
         
         for (account_id, service_id), rate_info in latest_rates.items():
             try:
                 # Convert to integers for consistency
                 account_id_int = int(account_id)
                 service_id_int = int(service_id)
+                
+                # Skip services not in selected categories
+                if allowed_services is not None and str(service_id_int) not in allowed_services:
+                    skipped_category += 1
+                    continue
                 
                 # Skip services with rate tiers
                 if str(service_id_int) in services_with_tiers:
@@ -1172,6 +1365,8 @@ class RateManager:
             print("❌ No rates to index")
             if skipped_existing > 0:
                 print(f"   • {skipped_existing} rates already exist for target date")
+            if skipped_category > 0:
+                print(f"   • {skipped_category} services not in selected categories")
             if skipped_invalid > 0:
                 print(f"   • {skipped_invalid} rates had invalid data")
             if skipped_tiers > 0:
@@ -1181,6 +1376,8 @@ class RateManager:
         print(f"📋 Will create {len(indexed_rates)} indexed rates for all accounts")
         if skipped_existing > 0:
             print(f"   • {skipped_existing} rates already exist (will skip)")
+        if skipped_category > 0:
+            print(f"   • {skipped_category} services not in selected categories (skipped)")
         if skipped_invalid > 0:
             print(f"   • {skipped_invalid} rates had invalid data (skipped)")
         if skipped_tiers > 0:
@@ -1209,7 +1406,7 @@ class RateManager:
         # Create the indexed rates
         self._create_indexed_rates_batch(indexed_rates)
 
-    def _perform_account_indexation(self, account_id: int, percentage: float, formatted_date: str, display_date: str):
+    def _perform_account_indexation(self, account_id: int, percentage: float, formatted_date: str, display_date: str, categories: List[str] = None):
         """Perform account-specific rate indexation with improved error handling"""
         print(f"🏢 Starting indexation for Account {account_id} ({percentage:+.2f}%)...")
         
@@ -1222,6 +1419,16 @@ class RateManager:
         services_with_tiers = self._get_services_with_rate_tiers(dump_data)
         if services_with_tiers:
             print(f"⚠️  Found {len(services_with_tiers)} service(s) with rate tiers - these will be skipped")
+        
+        # Get services to include based on category filter
+        allowed_services = None
+        if categories:
+            allowed_services = self._get_services_by_category(dump_data, categories)
+            if allowed_services:
+                print(f"🔍 Category filter: {len(allowed_services)} services in selected categories")
+            else:
+                print(f"⚠️  No services found in selected categories")
+                return
         
         # Filter rates for the target account with validation
         account_rates = []
@@ -1270,9 +1477,15 @@ class RateManager:
         skipped_existing = 0
         skipped_invalid = 0
         skipped_tiers = 0
+        skipped_category = 0
         
         for service_id_int, rate_info in latest_rates.items():
             try:
+                # Skip services not in selected categories
+                if allowed_services is not None and str(service_id_int) not in allowed_services:
+                    skipped_category += 1
+                    continue
+                
                 # Skip services with rate tiers
                 if str(service_id_int) in services_with_tiers:
                     skipped_tiers += 1
@@ -1312,6 +1525,8 @@ class RateManager:
             print("❌ No rates to index")
             if skipped_existing > 0:
                 print(f"   • {skipped_existing} rates already exist for target date")
+            if skipped_category > 0:
+                print(f"   • {skipped_category} services not in selected categories")
             if skipped_invalid > 0:
                 print(f"   • {skipped_invalid} rates had invalid data")
             if skipped_tiers > 0:
@@ -1321,6 +1536,8 @@ class RateManager:
         print(f"📋 Will create {len(indexed_rates)} indexed rates for Account {account_id}")
         if skipped_tiers > 0:
             print(f"   • {skipped_tiers} services with rate tiers skipped (not supported)")
+        if skipped_category > 0:
+            print(f"   • {skipped_category} services not in selected categories (skipped)")
         
         # Show all changes for account-specific indexation
         print(f"\n📊 Rate changes for Account {account_id}:")
@@ -1342,7 +1559,7 @@ class RateManager:
         # Create the indexed rates
         self._create_indexed_rates_batch(indexed_rates)
 
-    def _perform_list_price_indexation(self, percentage: float, formatted_date: str, display_date: str):
+    def _perform_list_price_indexation(self, percentage: float, formatted_date: str, display_date: str, categories: List[str] = None):
         """Perform list price indexation for services with manual rates"""
         print(f"📝 Starting list price indexation ({percentage:+.2f}%)...")
         
@@ -1361,6 +1578,16 @@ class RateManager:
         services_with_tiers = self._get_services_with_rate_tiers(dump_data)
         if services_with_tiers:
             print(f"⚠️  Found {len(services_with_tiers)} service(s) with rate tiers - these will be skipped")
+        
+        # Get services to include based on category filter
+        allowed_services = None
+        if categories:
+            allowed_services = self._get_services_by_category(dump_data, categories)
+            if allowed_services:
+                print(f"🔍 Category filter: {len(allowed_services)} services in selected categories")
+            else:
+                print(f"⚠️  No services found in selected categories")
+                return
         
         # Find list prices (rates with account_id = null/empty)
         list_price_rates = []
@@ -1404,9 +1631,15 @@ class RateManager:
         skipped_invalid = 0
         skipped_existing = 0
         skipped_tiers = 0
+        skipped_category = 0
         
         for service_id_int, rate_info in latest_list_prices.items():
             try:
+                # Skip services not in selected categories
+                if allowed_services is not None and str(service_id_int) not in allowed_services:
+                    skipped_category += 1
+                    continue
+                
                 # Skip services with rate tiers
                 if str(service_id_int) in services_with_tiers:
                     skipped_tiers += 1
@@ -1445,6 +1678,8 @@ class RateManager:
             print("❌ No list prices to index")
             if skipped_existing > 0:
                 print(f"   • {skipped_existing} list prices already exist for target date")
+            if skipped_category > 0:
+                print(f"   • {skipped_category} services not in selected categories")
             if skipped_invalid > 0:
                 print(f"   • {skipped_invalid} list prices had invalid data")
             if skipped_tiers > 0:
@@ -1454,6 +1689,8 @@ class RateManager:
         print(f"📋 Will create {len(indexed_rates)} indexed list prices")
         if skipped_existing > 0:
             print(f"   • {skipped_existing} list prices already exist (will skip)")
+        if skipped_category > 0:
+            print(f"   • {skipped_category} services not in selected categories (skipped)")
         if skipped_invalid > 0:
             print(f"   • {skipped_invalid} list prices had invalid data (skipped)")
         if skipped_tiers > 0:
