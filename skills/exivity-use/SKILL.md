@@ -27,6 +27,19 @@ Use this skill to produce real USE scripts, not pseudocode. Favor complete extra
 - Prefer `clear http_headers` before setting a fresh header set for a different request.
 - Validate HTTP responses immediately after each request. If the task requires strict failure handling, terminate with error on non-success status.
 
+### Strict function and syntax rules
+
+- The **only** supported `@FUNCTION` calls are: `@MIN`, `@MAX`, `@ROUND`, `@CONCAT`, `@SUBSTR`, `@STRLEN`, `@PAD`, `@EXTRACT_BEFORE`, `@EXTRACT_AFTER`, `@CURDATE`, `@DATEADD`, `@DATEDIFF`, `@DTADD`, `@FILE_EXISTS`. **Never** use `@MATH` or any other function not in this list — they do not exist.
+- For arithmetic, use `var` expressions: `var x = (${x} + 2)` (integer and float) or operators: `var x += 10` (integer only, also `-=`, `*=`, `/=`, `%=`).
+- Variables use `${name}` syntax. Buffers use `{name}` syntax. These are **different namespaces** — never confuse them. The `.LENGTH` suffix only works on variables, not buffers.
+- `loop label [count] [timeout ms] { ... }` auto-creates `${label.COUNT}` — no manual counter needed.
+
+### ODBC limitations
+
+- A failed `buffer name = odbc_direct "query"` **immediately terminates the script**. There is no way to catch, trap, or recover from an ODBC failure in USE.
+- There is **no** `set odbc_retry_count` or `set odbc_retry_delay` — ODBC has no retry mechanism (unlike HTTP which has `set http_retry_count` / `set http_retry_delay`).
+- **Never** generate a retry/wait loop around `odbc_direct` — the fatal error kills the script before the loop can iterate. If the user asks for ODBC retry, explain the limitation and suggest retrying outside USE (PowerShell wrapper, Workflow scheduling, etc.).
+
 ## Preferred output patterns
 
 ### REST extractors

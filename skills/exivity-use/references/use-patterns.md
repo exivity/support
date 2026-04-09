@@ -17,6 +17,8 @@
 
 ## Error-handling pattern
 
+### HTTP errors
+
 Use this whenever the user asks for strict behavior:
 
 ```use
@@ -27,6 +29,19 @@ if (${HTTP_STATUS_CODE} !~ /200|202/) {
     terminate with error
 }
 ```
+
+HTTP supports built-in retry via `set http_retry_count` and `set http_retry_delay` (milliseconds). After all retries are exhausted, `${HTTP_STATUS_CODE}` is `-1` on transport failure — the script can still branch on this.
+
+### ODBC errors
+
+ODBC errors are **fatal and immediate** — a failed `buffer name = odbc_direct "query"` terminates the script with `S_ERROR`. There is:
+
+- No ODBC status variable (unlike `${HTTP_STATUS_CODE}` for HTTP).
+- No `set odbc_retry_count` or `set odbc_retry_delay`.
+- No way to catch the error inside a `loop` or `if` block.
+- No way to check whether a buffer was created after an ODBC call (the script is already dead).
+
+**Never** generate a retry loop around `odbc_direct` — it cannot work. If the user asks for ODBC retry, explain the limitation and suggest retrying outside the USE script (e.g. PowerShell wrapper, Exivity Workflow scheduling).
 
 ## Auth patterns to prefer
 
