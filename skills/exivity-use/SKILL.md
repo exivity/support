@@ -22,10 +22,14 @@ Use this skill to produce real USE scripts, not pseudocode. Favor complete extra
 - In `if` expressions, quote string-valued variables when special characters may appear: `if ("${name}" == "")`.
 - For `match`, always include at least one capture group in the regex.
 - Treat missing JSON paths as `EXIVITY_NOT_FOUND` and handle optional fields explicitly.
+- **Optional JSON arrays must be probed before `foreach`.** A `foreach` over a missing path raises a fatal "JSON path becomes invalid" error and halts the script — it does **not** silently iterate zero times. Read the path into a `var` first and only enter the `foreach` when it is not `EXIVITY_NOT_FOUND`.
 - Use `public var` for operator-editable settings and `public encrypt var` for secrets that should appear in the GUI.
+- **Prefer plain `public var` for secrets sourced from environment variables.** `public encrypt var` can corrupt externally-supplied secrets in some Exivity installs (the value gets re-encrypted machine-specifically and the wire value becomes unusable). When the secret comes from a `${ENV_VAR}` reference, default to `public var` unless the operator explicitly wants GUI-encrypted storage.
 - Remember that `encrypt` and `encrypted` are preprocessor directives and encrypted values are machine-specific.
 - Prefer `clear http_headers` before setting a fresh header set for a different request.
 - Validate HTTP responses immediately after each request. If the task requires strict failure handling, terminate with error on non-success status.
+- **`set http_retry_count` / `set http_retry_delay` only retry on transport failure (`${HTTP_STATUS_CODE} == -1`), NOT on application-level statuses like 429 / 500 / 503.** To handle rate limiting or server errors, hand-roll a retry loop around the request and branch on `${HTTP_STATUS_CODE}` explicitly. Expose retry knobs as `public var` (e.g. `retry_count`, `retry_delay_ms`) so operators can tune.
+- **Expose operationally-tunable HTTP behavior as `public var`**: page size, retry count, retry delay, timeouts, granularity (`daily`/`hourly`), and any optional inclusion switches. Hard-coded values force script edits for routine tuning.
 
 ### Strict function and syntax rules
 

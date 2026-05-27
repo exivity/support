@@ -26,6 +26,12 @@ Use this skill to produce real Transcript transformer scripts, not generic ETL p
 - When using `aggregate`, remember that Transcript automatically creates `EXIVITY_AGGR_COUNT`.
 - Keep `where` blocks limited to statements Transcript actually permits there.
 - Choose `finish` when the user wants RDF/report output, and `export` when they want an intermediate CSV or JSON file.
+- With `pattern enabled` imports, regex matching applies to the filename portion; keep directory parts literal (for example use `${dataYear}/${dataMonth}` in the path).
+- Avoid deriving `hour` from `EXIVITY_FILE_NAME` using nested underscore extraction; this is brittle when host/file segments include underscores. Prefer hourly-file import + aggregate logic, or a dedicated `hour` column from the extractor.
+- **Column-to-column copy uses `set <target> as <source>`**, not `set <target> to [<source>]`. The bracketed form is treated as a literal token, not a column reference. Use `set cluster_name as cluster_uuid`, not `set cluster_name to [cluster_uuid]`.
+- **When a downstream dset needs an additional field from a lookup, update three places consistently**: (1) extend the `correlate` field list to pull the new field, (2) add `match <field>` to any subsequent `aggregate` so the field survives reduction, (3) remove any `create column <field>` that would otherwise reset it to empty.
+- **The `services {}` block must reference the FINAL (post-rename, post-lowercase) column names.** After lowercasing operational columns or renaming `Usage` → `quantity`, update `consumption_col`, `unit_label_col`, `category_col`, etc. accordingly. Mismatched names cause silent service-build failures.
+- **Provide fallbacks for empty enrichment columns** (e.g. when a vendor API does not return a friendly name). After aggregate, use `where ([col] == "") { set col as <fallback_col> }` and `where ([col] == "EXIVITY_NOT_FOUND") { set col as <fallback_col> }` to ensure the field is always populated.
 
 ## Preferred transformer workflow
 
