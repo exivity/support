@@ -111,7 +111,7 @@ if ($null -eq $ReportId -or $ReportId.Trim().Length -eq 0) {
 }
 
 if ($null -eq $Depth -or $Depth.Trim().Length -eq 0) {
-    $Depth = Read-Host "Report depth"
+    $Depth = Read-Host "Report depth, use 3 for instance-level records"
 }
 
 if ($null -eq $FromDate -or $FromDate.Trim().Length -eq 0) {
@@ -154,7 +154,7 @@ try {
 
     Write-Host "Downloading report CSV..."
 
-    $query = "start={0}&end={1}&format=csv&include=account_key%2Caccount_name%2Cservice_key%2Cservice_description%2Cservicecategory_name%2Cstart_date%2Cend_date&summary_options=services%2Caccounts&dimension=accounts%2Cservices&timeline=day&depth={2}" -f `
+    $query = "start={0}&end={1}&format=csv&include=account_key%2Caccount_name%2Cservice_key%2Cservice_description%2Cservicecategory_name%2Cstart_date%2Cend_date&summary_options=services%2Caccounts&dimension=accounts%2Cservices%2Cinstances&timeline=day&depth={2}" -f `
         [Uri]::EscapeDataString($FromDate),
         [Uri]::EscapeDataString($ToDate),
         [Uri]::EscapeDataString($Depth)
